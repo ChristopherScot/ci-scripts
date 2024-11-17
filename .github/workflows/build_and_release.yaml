@@ -2,8 +2,8 @@ name: Build and Release
 
 on:
   push:
-    tags:
-      - "v*.*.*" # Trigger the workflow on version tags
+    paths:
+      - "VERSION"
 
 jobs:
   build:
