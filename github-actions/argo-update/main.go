@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/ChristopherScot/ci-scripts/github-actions/argo-publish/models"
+	"github.com/ChristopherScot/ci-scripts/github-actions/argo-update/models"
 	"github.com/davecgh/go-spew/spew"
 	"gopkg.in/yaml.v2"
 )

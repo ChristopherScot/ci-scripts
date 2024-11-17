@@ -1,4 +1,4 @@
-module github.com/ChristopherScot/ci-scripts/github-actions/argo-publish
+module github.com/ChristopherScot/ci-scripts/github-actions/argo-update
 
 go 1.22.2
 
