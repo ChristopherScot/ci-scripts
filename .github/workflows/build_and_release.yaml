@@ -18,7 +18,7 @@ jobs:
         id: set-output
         run: |
           subfolders=$(ls -d */ | sed 's#/##')
-          subfolders_json=$(printf '%s\n' "$subfolders" | jq -R . | jq -s .)
+          subfolders_json=$(echo "$subfolders" | jq -R -s -c 'split("\n") | map(select(length > 0))')
           echo "subfolders=$subfolders_json" >> $GITHUB_OUTPUT
 
   build:
