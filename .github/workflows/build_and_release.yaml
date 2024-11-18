@@ -6,11 +6,27 @@ on:
       - "VERSION"
 
 jobs:
+  discover-subfolders:
+    runs-on: ubuntu-latest
+    outputs:
+      subfolders: ${{ steps.set-output.outputs.subfolders }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Discover subfolders
+        id: set-output
+        run: |
+          subfolders=$(ls -d */ | sed 's#/##')
+          echo "subfolders=$subfolders" >> $GITHUB_ENV
+          echo "::set-output name=subfolders::$subfolders"
+
   build:
+    needs: discover-subfolders
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        subfolder: ["argo-update", "another-subfolder", "yet-another-subfolder"] # Add your subfolders here
+        subfolder: ${{ fromJson(needs.discover-subfolders.outputs.subfolders) }}
 
     steps:
       - name: Checkout code
@@ -23,16 +39,16 @@ jobs:
 
       - name: Read version
         id: get_version
-        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_ENV
+        run: echo "VERSION=$(cat VERSION | head -n 1)" >> $GITHUB_ENV
 
       - name: Build binary
         run: |
-          cd github-actions/${{ matrix.subfolder }}
+          cd ${{ matrix.subfolder }}
           go build -o ${{ matrix.subfolder }}
 
       - name: Archive binary
         run: |
-          tar -czvf ${{ matrix.subfolder }}.tar.gz -C github-actions/${{ matrix.subfolder }} ${{ matrix.subfolder }}
+          tar -czvf ${{ matrix.subfolder }}.tar.gz -C ${{ matrix.subfolder }} ${{ matrix.subfolder }}
 
       - name: Create Release
         id: create_release
