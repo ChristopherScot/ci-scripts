@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/ChristopherScot/ci-scripts/github-actions/argo-update/models"
-	"github.com/davecgh/go-spew/spew"
 	"gopkg.in/yaml.v2"
 )
 
@@ -21,21 +20,23 @@ var serviceTemplate string
 var deploymentTemplate string
 
 func main() {
-	if len(os.Args) < 2 {
+	config_file := os.Args[1]
+
+	if len(os.Args) < 3 {
 		log.Fatal("Usage: go run main.go <image_url> [namespace]")
 	}
 
-	imageURL := os.Args[1]
+	imageURL := os.Args[2]
 	namespace := "default"
 
-	if len(os.Args) > 2 {
-		namespace = os.Args[2]
+	if len(os.Args) > 3 {
+		namespace = os.Args[3]
 	}
 	log.Default().Println("Image URL: ", imageURL)
 	log.Default().Println("Namespace: ", namespace)
 
 	// Get config from yaml file
-	configFile, err := os.ReadFile("./config.yaml")
+	configFile, err := os.ReadFile(config_file)
 	if err != nil {
 		log.Fatalf("Error reading config file: %v", err)
 	}
@@ -45,7 +46,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error parsing config file: %v", err)
 	}
-	spew.Dump(config)
 
 	createDeploymentYaml(config, namespace, imageURL)
 	createServiceYaml(config, namespace)
