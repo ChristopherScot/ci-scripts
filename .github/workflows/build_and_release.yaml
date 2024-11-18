@@ -54,13 +54,12 @@ jobs:
           tar -czvf ${{ matrix.subfolder }}.tar.gz -C ${{ matrix.subfolder }} ${{ matrix.subfolder }}
 
       - name: Create Release and Upload Asset
-      uses: softprops/action-gh-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        files: ./${{ matrix.subfolder }}.tar.gz
-        tag_name: ${{ env.VERSION }}
-        release_name: Release ${{ env.VERSION }}
-        body: ${{ env.VERSION_DESCRIPTION }}
-        draft: false
-        prerelease: false
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: ./${{ matrix.subfolder }}.tar.gz
+          tag_name: ${{ env.VERSION }}
+          body: ${{ env.VERSION_DESCRIPTION }}
+          draft: false
+          prerelease: false
