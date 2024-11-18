@@ -53,24 +53,14 @@ jobs:
         run: |
           tar -czvf ${{ matrix.subfolder }}.tar.gz -C ${{ matrix.subfolder }} ${{ matrix.subfolder }}
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
-        with:
-          tag_name: ${{ env.VERSION }}
-          release_name: Release ${{ github.ref }}
-          body: ${{ env.VERSION_DESCRIPTION }}
-          draft: false
-          prerelease: false
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./${{ matrix.subfolder }}.tar.gz
-          asset_name: ${{ matrix.subfolder }}.tar.gz
-          asset_content_type: application/gzip
+      - name: Create Release and Upload Asset
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        files: ./${{ matrix.subfolder }}.tar.gz
+        tag_name: ${{ env.VERSION }}
+        release_name: Release ${{ env.VERSION }}
+        body: ${{ env.VERSION_DESCRIPTION }}
+        draft: false
+        prerelease: false
