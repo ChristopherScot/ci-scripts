@@ -3,3 +3,4 @@ app-of-apps
 config.yaml
 .vscode
 test-service
+github-actions
