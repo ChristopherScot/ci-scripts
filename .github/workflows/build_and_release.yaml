@@ -41,7 +41,7 @@ jobs:
         id: get_version
         run: |
           echo "VERSION=$(cat VERSION | head -n 1)" >> $GITHUB_ENV
-          echo "VERSION_DESCRIPTION=$(cat VERSION | head -n 3)" >> $GITHUB_ENV
+          echo "VERSION_DESCRIPTION=$(cat VERSION | head -n 3 | tail -n 1)" >> $GITHUB_ENV
         working-directory: .
 
       - name: Build binary
