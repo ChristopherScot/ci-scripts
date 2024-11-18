@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        subfolder: ${{ fromJson(needs.discover-subfolders.outputs.subfolders) }}
+        subfolder: ${{ needs.discover-subfolders.outputs.subfolders }}
 
     steps:
       - name: Checkout code
