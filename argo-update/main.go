@@ -20,20 +20,18 @@ var serviceTemplate string
 var deploymentTemplate string
 
 func main() {
-	config_file := os.Args[1]
 
 	if len(os.Args) < 3 {
-		log.Fatal("Usage: go run main.go <image_url> [namespace]")
+		log.Fatal("Usage: go run main.go <config_file> <image_url> [namespace]")
 	}
 
+	config_file := os.Args[1]
 	imageURL := os.Args[2]
 	namespace := "default"
 
 	if len(os.Args) > 3 {
 		namespace = os.Args[3]
 	}
-	log.Default().Println("Image URL: ", imageURL)
-	log.Default().Println("Namespace: ", namespace)
 
 	// Get config from yaml file
 	configFile, err := os.ReadFile(config_file)
