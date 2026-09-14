@@ -66,17 +66,19 @@ func createDeploymentYaml(config models.Config, namespace string, imageURL strin
 	}
 	defer file.Close()
 
+	// An override supplies the whole manifest, for services the generated
+	// template cannot express (extra volumes, securityContext, probes,
+	// sidecars). It is still rendered as a template rather than written
+	// verbatim, so it can use {{ .ImageURL }} - otherwise an override would
+	// pin whatever tag its author typed and CI could never update it, which
+	// is the one thing this tool exists to do.
+	deploymentSource := deploymentTemplate
 	if config.DeploymentOverride != nil {
-		// Write the deployment override to the file
-		_, err = file.WriteString(*config.DeploymentOverride)
-		if err != nil {
-			log.Fatalf("Error writing deployment override to file: %v", err)
-		}
-		return
+		deploymentSource = *config.DeploymentOverride
 	}
 
 	// Parse the template
-	tmpl, err := template.New("deployment").Parse(deploymentTemplate)
+	tmpl, err := template.New("deployment").Parse(deploymentSource)
 	if err != nil {
 		log.Fatalf("Error parsing template file: %v", err)
 	}
@@ -116,17 +118,13 @@ func createServiceYaml(config models.Config, namespace string) {
 	}
 	defer file.Close()
 
+	serviceSource := serviceTemplate
 	if config.ServiceOverride != nil {
-		// Write the service override to the file
-		_, err = file.WriteString(*config.ServiceOverride)
-		if err != nil {
-			log.Fatalf("Error writing service override to file: %v", err)
-		}
-		return
+		serviceSource = *config.ServiceOverride
 	}
 
 	// Parse the template
-	tmpl, err := template.New("service").Parse(serviceTemplate)
+	tmpl, err := template.New("service").Parse(serviceSource)
 	if err != nil {
 		log.Fatalf("Error parsing template file: %v", err)
 	}
@@ -164,17 +162,13 @@ func createAppYaml(config models.Config, path string) {
 	}
 	defer file.Close()
 
+	appSource := appTemplate
 	if config.AppOverride != nil {
-		// Write the app override to the file
-		_, err = file.WriteString(*config.AppOverride)
-		if err != nil {
-			log.Fatalf("Error writing app override to file: %v", err)
-		}
-		return
+		appSource = *config.AppOverride
 	}
 
 	// Parse the template
-	tmpl, err := template.New("app").Parse(appTemplate)
+	tmpl, err := template.New("app").Parse(appSource)
 	if err != nil {
 		log.Fatalf("Error parsing template file: %v", err)
 	}
