@@ -1,4 +1,6 @@
-v0.0.4
+v0.0.5
+
+v0.0.5 Overrides are rendered as templates, so they can use {{ .ImageURL }}
 
 v0.0.4 Allow specifying config file location
 
