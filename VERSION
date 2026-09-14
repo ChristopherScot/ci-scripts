@@ -1,6 +1,6 @@
-v0.0.5
+v0.0.6
 
-v0.0.5 Overrides are rendered as templates, so they can use {{ .ImageURL }}
+v0.0.6 Substitute ImageURL into deployment_override
 
 v0.0.4 Allow specifying config file location
 

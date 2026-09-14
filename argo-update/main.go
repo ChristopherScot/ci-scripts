@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/github-actions/argo-update/models"
 	"gopkg.in/yaml.v2"
@@ -53,6 +54,18 @@ func main() {
 
 }
 
+// substituteImageURL replaces the {{ .ImageURL }} placeholder in an
+// override. Deliberately a literal replacement, not a template execution:
+// overrides commonly contain other templating syntax (ExternalSecret bodies
+// use ESO's {{ .key }} and b64enc) that Go's template parser would reject.
+// Tolerates the usual spacing variants.
+func substituteImageURL(src, imageURL string) string {
+	for _, ph := range []string{"{{ .ImageURL }}", "{{.ImageURL}}", "{{ .ImageURL}}", "{{.ImageURL }}"} {
+		src = strings.ReplaceAll(src, ph, imageURL)
+	}
+	return src
+}
+
 func createDeploymentYaml(config models.Config, namespace string, imageURL string) {
 
 	// create directory if it doesn't exist
@@ -68,17 +81,25 @@ func createDeploymentYaml(config models.Config, namespace string, imageURL strin
 
 	// An override supplies the whole manifest, for services the generated
 	// template cannot express (extra volumes, securityContext, probes,
-	// sidecars). It is still rendered as a template rather than written
-	// verbatim, so it can use {{ .ImageURL }} - otherwise an override would
-	// pin whatever tag its author typed and CI could never update it, which
-	// is the one thing this tool exists to do.
-	deploymentSource := deploymentTemplate
+	// sidecars). It still needs the built image, or it would pin whatever
+	// tag its author typed and CI could never update it - the one thing
+	// this tool exists to do.
+	//
+	// Only ImageURL is substituted, by literal replacement rather than by
+	// running the override through text/template. Overrides routinely embed
+	// OTHER templating languages - an ExternalSecret carries ESO's own
+	// {{ .username }} and b64enc - and Go's parser would try to evaluate
+	// those and fail.
 	if config.DeploymentOverride != nil {
-		deploymentSource = *config.DeploymentOverride
+		_, err = file.WriteString(substituteImageURL(*config.DeploymentOverride, imageURL))
+		if err != nil {
+			log.Fatalf("Error writing deployment override to file: %v", err)
+		}
+		return
 	}
 
 	// Parse the template
-	tmpl, err := template.New("deployment").Parse(deploymentSource)
+	tmpl, err := template.New("deployment").Parse(deploymentTemplate)
 	if err != nil {
 		log.Fatalf("Error parsing template file: %v", err)
 	}
@@ -118,13 +139,16 @@ func createServiceYaml(config models.Config, namespace string) {
 	}
 	defer file.Close()
 
-	serviceSource := serviceTemplate
 	if config.ServiceOverride != nil {
-		serviceSource = *config.ServiceOverride
+		_, err = file.WriteString(*config.ServiceOverride)
+		if err != nil {
+			log.Fatalf("Error writing service override to file: %v", err)
+		}
+		return
 	}
 
 	// Parse the template
-	tmpl, err := template.New("service").Parse(serviceSource)
+	tmpl, err := template.New("service").Parse(serviceTemplate)
 	if err != nil {
 		log.Fatalf("Error parsing template file: %v", err)
 	}
@@ -162,13 +186,16 @@ func createAppYaml(config models.Config, path string) {
 	}
 	defer file.Close()
 
-	appSource := appTemplate
 	if config.AppOverride != nil {
-		appSource = *config.AppOverride
+		_, err = file.WriteString(*config.AppOverride)
+		if err != nil {
+			log.Fatalf("Error writing app override to file: %v", err)
+		}
+		return
 	}
 
 	// Parse the template
-	tmpl, err := template.New("app").Parse(appSource)
+	tmpl, err := template.New("app").Parse(appTemplate)
 	if err != nil {
 		log.Fatalf("Error parsing template file: %v", err)
 	}
