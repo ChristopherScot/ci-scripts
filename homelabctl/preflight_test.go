@@ -1,0 +1,68 @@
+package main
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
+)
+
+// The failure this exists for: regenerating a live service dropped three
+// env vars the config never declared, and the pod crashlooped on startup.
+func TestEnvDriftIsBlocking(t *testing.T) {
+	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
+		Env: map[string]string{"KEEP": "1"}}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	live := &liveState{Env: []string{"PORT", "KEEP", "BASE_URL", "NTFY_URL"}}
+
+	f := checkEnvDrift(c, live)
+	if len(f) != 1 || !f[0].Blocking {
+		t.Fatalf("expected one blocking finding, got %+v", f)
+	}
+	for _, want := range []string{"BASE_URL", "NTFY_URL"} {
+		if !strings.Contains(f[0].Message, want) {
+			t.Errorf("finding does not name the dropped var %q: %s", want, f[0].Message)
+		}
+	}
+	if strings.Contains(f[0].Message, "KEEP") {
+		t.Error("a declared var was reported as dropped")
+	}
+}
+
+// PORT is set by the renderer, not the config, so it must not be reported.
+func TestPortIsNotReportedAsDrift(t *testing.T) {
+	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000}
+	_ = c.Validate()
+	if f := checkEnvDrift(c, &liveState{Env: []string{"PORT"}}); len(f) != 0 {
+		t.Errorf("PORT reported as drift: %+v", f)
+	}
+}
+
+// Renaming the ServiceAccount breaks Vault auth, because the role binds to
+// the old name and that binding is not a Kubernetes object.
+func TestServiceAccountRenameIsBlocking(t *testing.T) {
+	c := &config.Config{Name: "newname", Team: "t", Runtime: "go-service", Port: 3000,
+		Secrets: &config.Secrets{VaultPath: "p", Keys: []string{"K"}}}
+	_ = c.Validate()
+
+	f := checkServiceAccount(c, &liveState{ServiceAccount: "oldname"})
+	if len(f) != 1 || !f[0].Blocking {
+		t.Fatalf("expected a blocking finding, got %+v", f)
+	}
+	// The fix must tell the user to ADD the new binding before removing
+	// the old one; replacing it outright is what caused the outage.
+	if !strings.Contains(f[0].Fix, "oldname,newname") {
+		t.Errorf("fix should show adding both names, got: %s", f[0].Fix)
+	}
+}
+
+func TestNoFindingWhenServiceAccountMatches(t *testing.T) {
+	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
+		Secrets: &config.Secrets{VaultPath: "p", Keys: []string{"K"}}}
+	_ = c.Validate()
+	if f := checkServiceAccount(c, &liveState{ServiceAccount: "svc"}); len(f) != 0 {
+		t.Errorf("matching SA reported as drift: %+v", f)
+	}
+}

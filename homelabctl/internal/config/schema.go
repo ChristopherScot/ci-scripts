@@ -1,6 +1,6 @@
 package config
 
-// Schema is the JSON Schema for homelab.yaml.
+// Schema is the JSON Schema for config.yaml.
 //
 // Generated files reference it with a `# yaml-language-server: $schema=`
 // line, matching the convention already used by the arr-stack values

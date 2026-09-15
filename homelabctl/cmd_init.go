@@ -95,7 +95,7 @@ func runInit(o initOpts) error {
 	isCLI := !arts.Deployable
 
 	if arts.Deployable && c.Hardened() && !r.SupportsHardened() {
-		return fmt.Errorf("runtime %q cannot run hardened; set `hardened: false` in homelab.yaml", r.Name())
+		return fmt.Errorf("runtime %q cannot run hardened; set `hardened: false` in config.yaml", r.Name())
 	}
 	if err := confirm(o, c, isCLI); err != nil {
 		return err
@@ -318,12 +318,12 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		}
 	}
 	if a.Deployable {
-		if err := put("homelab.yaml", configYAML(c), 0); err != nil {
+		if err := put("config.yaml", configYAML(c), 0); err != nil {
 			return err
 		}
 		// Editors validate against this as you type, which is what turns a
 		// silently-ignored typo like `hardend:` into a visible squiggle.
-		if err := put("homelab.schema.json", config.Schema, 0); err != nil {
+		if err := put("config.schema.json", config.Schema, 0); err != nil {
 			return err
 		}
 		// Manifests are generated rather than copied, so they reflect
@@ -393,6 +393,13 @@ func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 	fmt.Printf("    into the homelab repo as %s/\n", o.name)
 	fmt.Printf("  - copy %s/deploy/_argocd-application.yaml into\n", dir)
 	fmt.Printf("    homelab app-of-apps/apps/%s.yaml\n", o.name)
+	// Mentioned unconditionally: init takes its config from flags, so it
+	// cannot know whether secrets will be added, and adding them later is
+	// the common case. Without this the Vault role is a step nobody knows
+	// to take, which is how a SecretStore ends up naming a role that does
+	// not exist.
+	fmt.Println("  - if you add `secrets:` to config.yaml, create its Vault role:")
+	fmt.Println("      homelabctl vault config.yaml --apply")
 	fmt.Println()
 	fmt.Println("argocd-image-updater then deploys every push. no homelab")
 	fmt.Println("credential is needed in the service repo.")
@@ -415,7 +422,7 @@ func writeFile(path, body string, mode uint32) error {
 
 func configYAML(c *config.Config) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `# yaml-language-server: $schema=homelab.schema.json
+	fmt.Fprintf(&b, `# yaml-language-server: $schema=config.schema.json
 # The single source of truth for this service. `+"`homelabctl render`"+`
 # regenerates every manifest from it, so change things here rather than
 # editing deploy/ by hand.

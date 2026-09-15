@@ -6,7 +6,7 @@ config schema, one place that encodes the cluster's conventions.
 ```sh
 homelabctl init myservice --runtime go-service --host myservice.example.com --public
 homelabctl init mytool --runtime go-cli
-homelabctl render homelab.yaml ghcr.io/owner/svc@sha256:...  --out .
+homelabctl render config.yaml ghcr.io/owner/svc@sha256:...  --out .
 homelabctl check deploy
 homelabctl update
 ```
@@ -69,7 +69,7 @@ Each of these presented as a `Synced/Healthy` app with nothing shipping:
 
 ## Config
 
-`homelab.yaml` is the source of truth; `render` regenerates every manifest
+`config.yaml` is the source of truth; `render` regenerates every manifest
 from it. Use `overrides` only for what the schema cannot express — and
 prefer widening the schema.
 

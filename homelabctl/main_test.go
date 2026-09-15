@@ -16,7 +16,7 @@ func TestVersionIsSet(t *testing.T) {
 func TestRootHasExpectedCommands(t *testing.T) {
 	want := map[string]bool{
 		"init": false, "render": false, "check": false,
-		"update": false, "version": false, "completion": false,
+		"update": false, "version": false, "completion": false, "vault": false,
 	}
 	for _, c := range rootCmd().Commands() {
 		if _, ok := want[c.Name()]; ok {
@@ -70,7 +70,7 @@ func TestIsNewer(t *testing.T) {
 // An abbreviated SHA is not a registry tag and yields ImagePullBackOff, so
 // render must refuse one rather than generate a manifest that cannot pull.
 func TestRenderRejectsAbbreviatedSHA(t *testing.T) {
-	err := runRender("nonexistent.yaml", "ghcr.io/o/x:abc1234", ".", "", "", "")
+	err := runRender("nonexistent.yaml", "ghcr.io/o/x:abc1234", ".", "", "", "", false, false)
 	if !errors.Is(err, errAbbreviatedSHA) {
 		t.Errorf("runRender with short SHA = %v, want errAbbreviatedSHA", err)
 	}

@@ -47,7 +47,7 @@ func TestInitGeneratesEveryRuntime(t *testing.T) {
 				want = append(want, f.Path)
 			}
 			if a.Deployable {
-				want = append(want, "Dockerfile", "homelab.yaml",
+				want = append(want, "Dockerfile", "config.yaml",
 					filepath.Join("deploy", "kustomization.yaml"),
 					filepath.Join("deploy", "deployment.yaml"))
 			}

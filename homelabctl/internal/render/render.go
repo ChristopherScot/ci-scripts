@@ -80,16 +80,22 @@ func kustomization(c *config.Config, out []Output) string {
 
 func namespace(c *config.Config) string {
 	// Pod Security Admission enforces at the namespace what the container
-	// securityContext merely requests: without this, setting
-	// `hardened: false` silently deploys an unconstrained pod.
+	// securityContext only requests. The level must match what the pod
+	// actually asks for: enforcing `restricted` on a hardened:false
+	// service rejects its own pod at admission, and Argo still reports
+	// Synced while nothing runs.
+	level := "restricted"
+	if !c.Hardened() {
+		level = "baseline"
+	}
 	return fmt.Sprintf(`apiVersion: v1
 kind: Namespace
 metadata:
   name: %s
   labels:
-    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce: %s
     pod-security.kubernetes.io/enforce-version: latest
-`, c.Namespace)
+`, c.Namespace, level)
 }
 
 func deployment(c *config.Config, imageRef string) string {

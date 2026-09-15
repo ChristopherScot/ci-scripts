@@ -24,6 +24,7 @@ var errAbbreviatedSHA = errors.New("image ref ends in an abbreviated SHA; regist
 
 func renderCmd() *cobra.Command {
 	var out, appOut, repoURL, appPath string
+	var dryRun, force bool
 	cmd := &cobra.Command{
 		Use:   "render <config.yaml> <image-ref>",
 		Short: "render manifests from a config",
@@ -32,17 +33,19 @@ func renderCmd() *cobra.Command {
 			"is not a registry tag and yields ImagePullBackOff.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runRender(args[0], args[1], out, appOut, repoURL, appPath)
+			return runRender(args[0], args[1], out, appOut, repoURL, appPath, dryRun, force)
 		},
 	}
 	cmd.Flags().StringVar(&out, "out", ".", "directory to write manifests into")
 	cmd.Flags().StringVar(&appOut, "app-out", "", "also write the Argo Application here")
 	cmd.Flags().StringVar(&repoURL, "repo-url", "https://github.com/ChristopherScot/homelab", "repo the Application syncs from")
 	cmd.Flags().StringVar(&appPath, "app-path", "", "path within that repo (default: service name)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "check against the running service and write nothing")
+	cmd.Flags().BoolVar(&force, "force", false, "write even if the change would break the running service")
 	return cmd
 }
 
-func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string) error {
+func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string, dryRun, force bool) error {
 
 	if shortSHA.MatchString(imageRef) {
 		return fmt.Errorf("%q: %w", imageRef, errAbbreviatedSHA)
@@ -54,6 +57,29 @@ func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string) error {
 	}
 	if c.Image.Repository == "" {
 		return fmt.Errorf("image.repository is required to render")
+	}
+
+	// Compare against what is actually running before touching anything.
+	// Regenerating a live service can silently drop env vars it declares
+	// nowhere, or rename an identity Vault still authorizes by the old
+	// name - both invisible until the pod crashloops.
+	findings, err := preflight(c)
+	switch {
+	case err != nil:
+		fmt.Println("preflight skipped:", err)
+	case len(findings) > 0:
+		if reportPreflight(findings) && !force {
+			return fmt.Errorf("\nrefusing to render: the above would break the running service.\n" +
+				"fix config.yaml, or pass --force if this is intended")
+		}
+	case !dryRun:
+		// nothing to report
+	default:
+		fmt.Println("preflight: no drift from the running service")
+	}
+	if dryRun {
+		fmt.Println("dry run: nothing written")
+		return nil
 	}
 
 	dir := filepath.Join(out, c.Name)
