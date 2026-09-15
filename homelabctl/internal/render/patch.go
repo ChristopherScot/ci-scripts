@@ -25,6 +25,13 @@ import (
 // applyPatches merges each patch into the matching document. Keyed by
 // resource kind (Deployment, CronJob, Service, Ingress, Namespace...),
 // because kind is the stable thing - a filename is render's business.
+//
+// The merge happens on the yaml.Node tree rather than on map[string]any.
+// Decoding to a map throws away key order, indentation and comments, so
+// re-marshalling rewrites the whole document alphabetically at a
+// different indent: a one-line annotation patch would produce a
+// hundred-line diff, and every patched service would have unreadable
+// history. Patching the node tree touches only the keys the patch names.
 func applyPatches(body string, patches map[string]string, imageRef string) (string, error) {
 	if len(patches) == 0 {
 		return body, nil
@@ -35,50 +42,97 @@ func applyPatches(body string, patches map[string]string, imageRef string) (stri
 		if strings.TrimSpace(doc) == "" {
 			continue
 		}
-		var node map[string]any
-		if err := yaml.Unmarshal([]byte(doc), &node); err != nil {
+		var root yaml.Node
+		if err := yaml.Unmarshal([]byte(doc), &root); err != nil {
 			return "", fmt.Errorf("parse generated document %d: %w", i+1, err)
 		}
-		kind, _ := node["kind"].(string)
-		patch, ok := patches[kind]
+		if len(root.Content) == 0 {
+			continue
+		}
+		patch, ok := patches[documentKind(&root)]
 		if !ok {
 			continue
 		}
 
-		var overlay map[string]any
-		if err := yaml.Unmarshal([]byte(strings.ReplaceAll(patch, ImagePlaceholder, imageRef)), &overlay); err != nil {
-			return "", fmt.Errorf("parse patch for kind %s: %w", kind, err)
+		var overlay yaml.Node
+		text := strings.ReplaceAll(patch, ImagePlaceholder, imageRef)
+		if err := yaml.Unmarshal([]byte(text), &overlay); err != nil {
+			return "", fmt.Errorf("parse patch for kind %s: %w", documentKind(&root), err)
 		}
-		merged := mergeMaps(node, overlay)
+		if len(overlay.Content) == 0 {
+			continue
+		}
+		mergeNodes(root.Content[0], overlay.Content[0])
 
-		b, err := yaml.Marshal(merged)
-		if err != nil {
-			return "", fmt.Errorf("re-marshal %s: %w", kind, err)
+		var b strings.Builder
+		enc := yaml.NewEncoder(&b)
+		// Match the generated manifests, which are written by hand at two
+		// spaces. The default of four would reindent every patched file.
+		enc.SetIndent(2)
+		if err := enc.Encode(root.Content[0]); err != nil {
+			return "", fmt.Errorf("re-marshal %s: %w", documentKind(&root), err)
 		}
-		docs[i] = strings.TrimRight(string(b), "\n")
+		enc.Close()
+		docs[i] = strings.TrimRight(b.String(), "\n")
 	}
-	return strings.Join(docs, "\n---\n"), nil
+	// Re-joining trims the trailing newline off the last document; without
+	// restoring it every patched file ends without one, which shows up as
+	// a spurious "\ No newline at end of file" in every review.
+	out := strings.Join(docs, "\n---\n")
+	if !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return out, nil
 }
 
-// mergeMaps overlays src onto dst recursively. Maps merge; every other
-// type replaces, including lists - a list merge would need a merge key per
-// field and would surprise more often than it helped. Replacing a list is
-// visible in the patch; a half-merged list is not.
-func mergeMaps(dst, src map[string]any) map[string]any {
-	out := make(map[string]any, len(dst)+len(src))
-	for k, v := range dst {
-		out[k] = v
+// documentKind reads the `kind` field of a parsed document.
+func documentKind(root *yaml.Node) string {
+	if len(root.Content) == 0 {
+		return ""
 	}
-	for k, v := range src {
-		if sub, ok := v.(map[string]any); ok {
-			if existing, ok := out[k].(map[string]any); ok {
-				out[k] = mergeMaps(existing, sub)
-				continue
-			}
+	return mappingValue(root.Content[0], "kind")
+}
+
+func mappingValue(m *yaml.Node, key string) string {
+	if m.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1].Value
 		}
-		out[k] = v
 	}
-	return out
+	return ""
+}
+
+// mergeNodes overlays src onto dst in place. Mappings merge key by key,
+// appending keys the base does not have; every other kind replaces,
+// including sequences - a list merge would need a merge key per field and
+// would surprise more often than it helped. Replacing a list is visible in
+// the patch; a half-merged list is not.
+func mergeNodes(dst, src *yaml.Node) {
+	if dst.Kind != yaml.MappingNode || src.Kind != yaml.MappingNode {
+		*dst = *src
+		return
+	}
+	for i := 0; i+1 < len(src.Content); i += 2 {
+		key, val := src.Content[i], src.Content[i+1]
+		if existing := mappingNode(dst, key.Value); existing != nil {
+			mergeNodes(existing, val)
+			continue
+		}
+		dst.Content = append(dst.Content, key, val)
+	}
+}
+
+// mappingNode returns the value node for key, or nil.
+func mappingNode(m *yaml.Node, key string) *yaml.Node {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // PatchedKinds lists the resource kinds a rendered service contains, so an

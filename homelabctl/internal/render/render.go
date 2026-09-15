@@ -6,6 +6,7 @@ package render
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
@@ -216,50 +217,25 @@ spec:
             - containerPort: %d
 `, c.Name, c.Namespace, c.Name, c.Team, c.Replicas, c.Name, metricsAnnotations(c), c.Name, c.Team, serviceAccountName(c), c.Name, imageRef, c.Port)
 
-	b.WriteString("          env:\n")
-	fmt.Fprintf(&b, "            - name: PORT\n              value: %q\n", fmt.Sprintf("%d", c.Port))
-	for _, k := range sortedKeys(c.Env) {
-		fmt.Fprintf(&b, "            - name: %s\n              value: %q\n", k, c.Env[k])
-	}
-	if c.Secrets != nil {
-		fmt.Fprintf(&b, "          envFrom:\n            - secretRef:\n                name: %s\n", c.SecretName())
-	}
-
-	fmt.Fprintf(&b, `          resources:
-            requests:
-              cpu: %s
-              memory: %s
-            limits:
-              memory: %s
-`, c.Resources.CPURequest, c.Resources.MemoryRequest, c.Resources.MemoryLimit)
-
-	if c.Hardened() {
-		// readOnlyRootFilesystem without a writable /tmp breaks anything
-		// that calls os.CreateTemp - and Node writes there routinely.
-		b.WriteString(`          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-`)
-		b.WriteString(`          securityContext:
-            allowPrivilegeEscalation: false
-            runAsNonRoot: true
-            runAsUser: 65532
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
-`)
-	}
+	// Shared with the CronJob: env, secrets, resources and hardening are
+	// the same container either way, and a second copy here is how PORT
+	// came to be emitted twice in one shape and once in the other.
+	b.WriteString(containerBody(c, "          "))
 	// Readiness polls faster than liveness: a slow readiness probe leaves a
 	// rolling pod taking traffic before it is ready, while an aggressive
 	// liveness probe restarts pods that are merely busy.
 	fmt.Fprintf(&b, `          readinessProbe:
-            httpGet: { path: %s, port: %d }
+            httpGet:
+              path: %s
+              port: %d
             initialDelaySeconds: 2
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:
-            httpGet: { path: %s, port: %d }
+            httpGet:
+              path: %s
+              port: %d
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
@@ -312,9 +288,25 @@ func metricsAnnotations(c *config.Config) string {
 func containerBody(c *config.Config, pad string) string {
 	var b strings.Builder
 	b.WriteString(pad + "env:\n")
-	fmt.Fprintf(&b, "%s  - name: PORT\n%s    value: \"%d\"\n", pad, pad, c.Port)
-	for _, k := range sortedKeys(c.Env) {
-		fmt.Fprintf(&b, "%s  - name: %s\n%s    value: %q\n", pad, k, pad, c.Env[k])
+	// PORT is a default, not an addition. Emitting it unconditionally and
+	// then ranging over Env would write the key TWICE for a config that
+	// sets it explicitly; Kubernetes accepts that and silently keeps the
+	// last one, so the duplicate is invisible until the wrong value wins.
+	env := map[string]string{"PORT": strconv.Itoa(c.Port)}
+	for k, v := range c.Env {
+		env[k] = v
+	}
+	// PORT leads, then the rest sorted. Sorting it in with the others
+	// would reorder every already-rendered manifest, so the first diff
+	// after this change would be churn in every service at once.
+	keys := []string{"PORT"}
+	for _, k := range sortedKeys(env) {
+		if k != "PORT" {
+			keys = append(keys, k)
+		}
+	}
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s  - name: %s\n%s    value: %q\n", pad, k, pad, env[k])
 	}
 	if c.Secrets != nil {
 		fmt.Fprintf(&b, "%senvFrom:\n%s  - secretRef:\n%s      name: %s\n",

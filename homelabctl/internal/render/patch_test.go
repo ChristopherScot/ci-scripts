@@ -104,3 +104,96 @@ func TestPatchAppliesToCronJobKind(t *testing.T) {
 		}
 	}
 }
+
+// A patch must change only what it names. Decoding to map[string]any and
+// re-marshalling rewrites the whole document alphabetically at a different
+// indent, which turns a one-line patch into a hundred-line diff and makes
+// patched services unreviewable in git.
+func TestPatchPreservesSurroundingFormatting(t *testing.T) {
+	before := findOutput(t, mustConfig(t, base()), "deployment.yaml")
+
+	c := base()
+	c.Patches = map[string]string{"Deployment": "spec:\n  replicas: 4\n"}
+	after := findOutput(t, mustConfig(t, c), "deployment.yaml")
+
+	if !strings.Contains(after, "replicas: 4") {
+		t.Fatalf("patch did not apply:\n%s", after)
+	}
+	for _, line := range strings.Split(before, "\n") {
+		if strings.TrimSpace(line) == "" || strings.Contains(line, "replicas:") {
+			continue
+		}
+		if !strings.Contains(after, line) {
+			t.Errorf("patch reformatted an untouched line: %q", line)
+		}
+	}
+}
+
+// Every file ends with a newline; a patched one used to lose it, which
+// shows up as a spurious "\ No newline at end of file" in every review.
+func TestPatchedOutputKeepsTrailingNewline(t *testing.T) {
+	c := base()
+	c.Patches = map[string]string{"Deployment": "spec:\n  replicas: 2\n"}
+	if body := findOutput(t, mustConfig(t, c), "deployment.yaml"); !strings.HasSuffix(body, "\n") {
+		t.Error("patched output lost its trailing newline")
+	}
+}
+
+// Kubernetes accepts a duplicated env var and silently keeps the last one,
+// so a config setting PORT explicitly used to get it twice with the
+// generated value winning.
+func TestExplicitPortEnvIsNotDuplicated(t *testing.T) {
+	c := base()
+	c.Env = map[string]string{"PORT": "3000"}
+	body := findOutput(t, mustConfig(t, c), "deployment.yaml")
+	if n := strings.Count(body, "- name: PORT"); n != 1 {
+		t.Errorf("PORT emitted %d times, want 1:\n%s", n, body)
+	}
+}
+
+// An explicit value must win over the generated default rather than being
+// silently discarded.
+func TestExplicitEnvOverridesGeneratedDefault(t *testing.T) {
+	c := base()
+	c.Env = map[string]string{"PORT": "9999"}
+	body := findOutput(t, mustConfig(t, c), "deployment.yaml")
+	if !strings.Contains(body, `value: "9999"`) {
+		t.Errorf("explicit PORT was discarded:\n%s", body)
+	}
+	if strings.Count(body, "- name: PORT") != 1 {
+		t.Errorf("PORT emitted more than once:\n%s", body)
+	}
+}
+
+// Deployment and CronJob are the same container; a second hand-rolled copy
+// of the spec is how PORT came to be duplicated in one shape and not the
+// other.
+func TestWorkloadShapesShareContainerSpec(t *testing.T) {
+	for _, field := range []string{"- name: PORT", "allowPrivilegeEscalation: false", "readOnlyRootFilesystem: true"} {
+		if body := findOutput(t, mustConfig(t, base()), "deployment.yaml"); !strings.Contains(body, field) {
+			t.Errorf("deployment missing %q", field)
+		}
+
+		cron := base()
+		cron.Kind = config.KindCronJob
+		cron.Schedule = "0 3 * * *"
+		if body := findOutput(t, mustConfig(t, cron), "cronjob.yaml"); !strings.Contains(body, field) {
+			t.Errorf("cronjob missing %q", field)
+		}
+	}
+}
+
+func findOutput(t *testing.T, c *config.Config, name string) string {
+	t.Helper()
+	outs, err := AllErr(c, "ghcr.io/o/svc:v1")
+	if err != nil {
+		t.Fatalf("AllErr() = %v", err)
+	}
+	for _, o := range outs {
+		if o.Path == name {
+			return o.Body
+		}
+	}
+	t.Fatalf("no %s in rendered output", name)
+	return ""
+}
