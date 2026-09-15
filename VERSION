@@ -1,6 +1,6 @@
-v1.0.0
+v1.0.1
 
-v1.0.0 homelabctl replaces argo-update: init/render/check/update, runtime plugins
+v1.0.1 Cross-compiled assets with version injected, so self-update works
 
 v0.0.4 Allow specifying config file location
 
