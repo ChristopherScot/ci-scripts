@@ -35,9 +35,19 @@ type Config struct {
 	Probes    *Probes           `yaml:"probes,omitempty"`
 	Resources *Resources        `yaml:"resources,omitempty"`
 
-	// Hardened applies a non-root, read-only-rootfs securityContext. On by
-	// default; a runtime whose image cannot satisfy it must say so.
-	Hardened *bool `yaml:"hardened,omitempty"`
+	// Hardened applies a non-root, read-only-rootfs securityContext.
+	//
+	// Defaults to ON. A plain bool cannot tell "unset" from "false", so the
+	// tri-state is confined to decoding: UnmarshalYAML flips this to
+	// Disabled only when the YAML says so. Callers building a Config in
+	// code get hardening without having to remember to ask, and render can
+	// read it without a nil check or a validation precondition.
+	HardeningDisabled bool `yaml:"-"`
+
+	// MetricsDisabled turns off Prometheus scraping. On by default: alloy
+	// discovers pods by annotation, so a service without them produces no
+	// metrics at all and the absence is silent.
+	MetricsDisabled bool `yaml:"-"`
 
 	// Overrides replace a generated file wholesale, for the cases the
 	// schema cannot express. Prefer widening the schema; this is the
@@ -78,6 +88,49 @@ type Resources struct {
 	MemoryLimit   string `yaml:"memoryLimit,omitempty"`
 }
 
+// UnmarshalYAML defaults Hardened to true. Without this, a config that
+// simply omits the field would decode to false and silently generate an
+// unhardened deployment - the opposite of the intended default.
+func (c *Config) UnmarshalYAML(value *yaml.Node) error {
+	type plain Config // avoid recursing into this method
+	var tmp plain
+	if err := value.Decode(&tmp); err != nil {
+		return err
+	}
+	*c = Config(tmp)
+
+	// `hardened:` is absent from the struct tags above precisely so that an
+	// omitted field cannot be read as false. Look for it explicitly.
+	var probe struct {
+		Hardened *bool `yaml:"hardened"`
+	}
+	if err := value.Decode(&probe); err != nil {
+		return err
+	}
+	if probe.Hardened != nil && !*probe.Hardened {
+		c.HardeningDisabled = true
+	}
+
+	var mprobe struct {
+		Metrics *bool `yaml:"metrics"`
+	}
+	if err := value.Decode(&mprobe); err != nil {
+		return err
+	}
+	if mprobe.Metrics != nil && !*mprobe.Metrics {
+		c.MetricsDisabled = true
+	}
+	return nil
+}
+
+// Hardened reports whether the generated deployment should run non-root
+// with a read-only root filesystem.
+func (c *Config) Hardened() bool { return !c.HardeningDisabled }
+
+// Metrics reports whether the pod should be annotated for Prometheus
+// scraping.
+func (c *Config) Metrics() bool { return !c.MetricsDisabled }
+
 var nameRE = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$`)
 
 // Load reads and validates a config, applying defaults so that callers see
@@ -94,16 +147,12 @@ func Load(path string) (*Config, error) {
 	return &c, c.Validate()
 }
 
-func (c *Config) applyDefaults() error {
+func (c *Config) applyDefaults() {
 	if c.Namespace == "" {
 		c.Namespace = c.Name
 	}
 	if c.Replicas == 0 {
 		c.Replicas = 1
-	}
-	if c.Hardened == nil {
-		t := true
-		c.Hardened = &t
 	}
 	if c.Probes == nil {
 		c.Probes = &Probes{Path: "/healthz"}
@@ -122,7 +171,6 @@ func (c *Config) applyDefaults() error {
 	if c.Resources.MemoryLimit == "" {
 		c.Resources.MemoryLimit = "64Mi"
 	}
-	return nil
 }
 
 // Validate applies defaults and then reports every problem at once rather
@@ -131,9 +179,7 @@ func (c *Config) applyDefaults() error {
 // a Config built in code - by `init`, or by a test - is as complete as one
 // read from disk.
 func (c *Config) Validate() error {
-	if err := c.applyDefaults(); err != nil {
-		return err
-	}
+	c.applyDefaults()
 	var errs []string
 	add := func(f string, a ...any) { errs = append(errs, fmt.Sprintf(f, a...)) }
 
@@ -146,7 +192,7 @@ func (c *Config) Validate() error {
 		add("team is required")
 	}
 	if c.Runtime == "" {
-		add("runtime is required (e.g. go, node)")
+		add("runtime is required; see `homelabctl init --help` for the registered runtimes")
 	}
 	if c.Secrets != nil {
 		if c.Secrets.VaultPath == "" {

@@ -1,5 +1,4 @@
 .git
 .github
-bin
 deploy
 *.md

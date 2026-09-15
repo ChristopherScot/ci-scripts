@@ -1,7 +1,9 @@
 package config
 
-import "strings"
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateReportsAllProblemsAtOnce(t *testing.T) {
 	err := (&Config{}).Validate()
@@ -31,8 +33,8 @@ func TestDefaultsAppliedByValidate(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("Validate() = %v", err)
 	}
-	if c.Namespace != "a" || c.Replicas != 1 || c.Hardened == nil || !*c.Hardened {
-		t.Errorf("defaults not applied: ns=%q replicas=%d hardened=%v", c.Namespace, c.Replicas, c.Hardened)
+	if c.Namespace != "a" || c.Replicas != 1 || !c.Hardened() {
+		t.Errorf("defaults not applied: ns=%q replicas=%d hardened=%v", c.Namespace, c.Replicas, c.Hardened())
 	}
 }
 

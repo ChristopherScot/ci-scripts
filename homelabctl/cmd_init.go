@@ -62,6 +62,9 @@ func initCmd() *cobra.Command {
 	f.BoolVar(&o.yes, "yes", false, "skip the confirmation prompt")
 
 	// Completing --runtime is the one that saves real typing.
+	cmd.MarkFlagsMutuallyExclusive("local-only", "remote-only")
+	// Only errors if the flag does not exist, which is a programming error
+	// caught by the first run.
 	_ = cmd.RegisterFlagCompletionFunc("runtime",
 		func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 			return runtime.Names(), cobra.ShellCompDirectiveNoFileComp
@@ -70,9 +73,6 @@ func initCmd() *cobra.Command {
 }
 
 func runInit(o initOpts) error {
-	if o.localOnly && o.remoteOnly {
-		return fmt.Errorf("--local-only and --remote-only are mutually exclusive")
-	}
 
 	r, err := runtime.Get(o.runtimeID)
 	if err != nil {
@@ -84,14 +84,13 @@ func runInit(o initOpts) error {
 		return err
 	}
 
-	if err := confirm(o, c, r.Kind() == runtime.KindCLI); err != nil {
+	isCLI := r.Kind() == runtime.KindCLI
+	if err := confirm(o, c, isCLI); err != nil {
 		return err
 	}
 	if o.dryRun {
 		return nil
 	}
-	isCLI := r.Kind() == runtime.KindCLI
-	_ = isCLI
 
 	// Remote first, so the local tree ends up inside a real clone with a
 	// remote already set, rather than files you then have to wire up.
@@ -106,7 +105,7 @@ func runInit(o initOpts) error {
 		dir = o.parentRepo
 	}
 	if o.remoteOnly {
-		printNext(o, c, dir, r.Kind() == runtime.KindCLI)
+		printNext(o, c, dir, isCLI)
 		return nil
 	}
 
@@ -117,7 +116,7 @@ func runInit(o initOpts) error {
 	if err := setupLocal(o, c, r, target); err != nil {
 		return fmt.Errorf("local setup: %w", err)
 	}
-	printNext(o, c, target, r.Kind() == runtime.KindCLI)
+	printNext(o, c, target, isCLI)
 	return nil
 }
 
@@ -347,7 +346,7 @@ func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 // cliWorkflow cross-compiles and publishes release assets, named to match
 // what the generated update command looks for. Triggered by a change to
 // VERSION rather than every push, so a release is deliberate.
-func cliWorkflow(r runtime.Runtime, p runtime.Params, o initOpts) string {
+func cliWorkflow(r runtime.Runtime, p runtime.Params) string {
 	return `name: release ` + p.Name + `
 
 on:
@@ -401,37 +400,6 @@ jobs:
 `
 }
 
-// splitPositional pulls the first bare argument out of args. Go's flag
-// package stops at the first non-flag, so without this `init foo --host x`
-// would silently ignore --host.
-func splitPositional(args []string) (string, []string) {
-	valueFlags := map[string]bool{
-		"--runtime": true, "--team": true, "--host": true, "--port": true,
-		"--owner": true, "--parent-repo": true,
-		"-runtime": true, "-team": true, "-host": true, "-port": true,
-		"-owner": true, "-parent-repo": true,
-	}
-	var name string
-	var rest []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if strings.HasPrefix(a, "-") {
-			rest = append(rest, a)
-			if valueFlags[a] && i+1 < len(args) {
-				i++
-				rest = append(rest, args[i])
-			}
-			continue
-		}
-		if name == "" {
-			name = a
-			continue
-		}
-		rest = append(rest, a)
-	}
-	return name, rest
-}
-
 func writeFile(path, body string, mode uint32) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -467,7 +435,7 @@ image:
 
 func workflow(r runtime.Runtime, p runtime.Params, o initOpts) string {
 	if r.Kind() == runtime.KindCLI {
-		return cliWorkflow(r, p, o)
+		return cliWorkflow(r, p)
 	}
 	trigger := `on:
   push:

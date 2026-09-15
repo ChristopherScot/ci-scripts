@@ -5,6 +5,7 @@ package render
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
@@ -93,21 +94,37 @@ metadata:
     team: %s
 spec:
   replicas: %d
+  # At one replica the default rolling update takes the only pod down
+  # first; surging instead keeps the service up across a deploy.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app: %s
   template:
     metadata:
-      labels:
+%s      labels:
         app: %s
         team: %s
     spec:
+      # Required by the restricted Pod Security Standard, and the cheapest
+      # hardening available.
+      # Longer than the server's 20s drain so shutdown finishes before
+      # SIGKILL.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: %s
           image: %s
           ports:
             - containerPort: %d
-`, c.Name, c.Namespace, c.Name, c.Team, c.Replicas, c.Name, c.Name, c.Team, c.Name, imageRef, c.Port)
+`, c.Name, c.Namespace, c.Name, c.Team, c.Replicas, c.Name, metricsAnnotations(c), c.Name, c.Team, c.Name, imageRef, c.Port)
 
 	b.WriteString("          env:\n")
 	fmt.Fprintf(&b, "            - name: PORT\n              value: %q\n", fmt.Sprintf("%d", c.Port))
@@ -126,7 +143,13 @@ spec:
               memory: %s
 `, c.Resources.CPURequest, c.Resources.MemoryRequest, c.Resources.MemoryLimit)
 
-	if *c.Hardened {
+	if c.Hardened() {
+		// readOnlyRootFilesystem without a writable /tmp breaks anything
+		// that calls os.CreateTemp - and Node writes there routinely.
+		b.WriteString(`          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+`)
 		b.WriteString(`          securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
@@ -136,14 +159,44 @@ spec:
               drop: [ALL]
 `)
 	}
-	for _, probe := range []string{"livenessProbe", "readinessProbe"} {
-		fmt.Fprintf(&b, `          %s:
+	// Readiness polls faster than liveness: a slow readiness probe leaves a
+	// rolling pod taking traffic before it is ready, while an aggressive
+	// liveness probe restarts pods that are merely busy.
+	fmt.Fprintf(&b, `          readinessProbe:
             httpGet: { path: %s, port: %d }
-            initialDelaySeconds: 5
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: %s, port: %d }
+            initialDelaySeconds: 10
             periodSeconds: 30
-`, probe, c.Probes.Path, c.Port)
+            timeoutSeconds: 5
+            failureThreshold: 5
+`, c.Probes.Path, c.Port, c.Probes.Path, c.Port)
+
+	if c.Hardened() {
+		b.WriteString(`      volumes:
+        - name: tmp
+          emptyDir: {}
+`)
 	}
 	return b.String()
+}
+
+// metricsAnnotations wires the pod into the cluster's metrics collection.
+// Alloy discovers scrape targets by annotation - nothing is collected
+// without these, and the absence is silent.
+func metricsAnnotations(c *config.Config) string {
+	if !c.Metrics() {
+		return ""
+	}
+	return fmt.Sprintf(`      annotations:
+        k8s.grafana.com/scrape: "true"
+        k8s.grafana.com/metrics.path: "/metrics"
+        k8s.grafana.com/metrics.portNumber: "%d"
+`, c.Port)
 }
 
 func service(c *config.Config) string {
@@ -169,7 +222,7 @@ func externalSecret(c *config.Config) string {
 	fmt.Fprintf(&b, `apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: external-secrets-sa
+  name: %s
   namespace: %s
 ---
 apiVersion: external-secrets.io/v1beta1
@@ -188,7 +241,7 @@ spec:
           mountPath: kubernetes
           role: %s
           serviceAccountRef:
-            name: external-secrets-sa
+            name: %s
 ---
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
@@ -203,7 +256,7 @@ spec:
   target:
     name: %s-secrets
   data:
-`, c.Namespace, c.Name, c.Namespace, c.Name, c.Name, c.Namespace, c.Name, c.Name)
+`, c.Name, c.Namespace, c.Name, c.Namespace, c.Name, c.Name, c.Name, c.Namespace, c.Name, c.Name)
 	for _, k := range c.Secrets.Keys {
 		fmt.Fprintf(&b, "    - secretKey: %s\n      remoteRef: { key: %s, property: %s }\n",
 			k, c.Secrets.VaultPath, strings.ToLower(k))
@@ -294,10 +347,6 @@ func sortedKeys(m map[string]string) []string {
 	for k := range m {
 		out = append(out, k)
 	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.Strings(out)
 	return out
 }
