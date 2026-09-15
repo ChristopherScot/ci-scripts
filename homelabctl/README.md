@@ -96,3 +96,28 @@ secrets:
   vaultPath: approvald/config
   keys: [NTFY_TOKEN, REGISTER_TOKEN]
 ```
+
+## Adjusting generated manifests
+
+Use `patches`, keyed by resource kind. Supply only what differs:
+
+```yaml
+patches:
+  Deployment: |
+    spec:
+      replicas: 3
+      template:
+        metadata:
+          annotations:
+            example.com/owner: platform
+```
+
+Nested maps merge, so the annotations the tool generates survive alongside
+yours. Everything else it generates — the securityContext, the rollout
+strategy, the probe timings, the scrape annotations — keeps applying, and
+keeps getting better as the conventions improve.
+
+`overrides` still exists and replaces a whole file. It also opts that
+service out of every future convention change for that file, silently and
+permanently, so reach for it only when a merge genuinely cannot express
+what you need.

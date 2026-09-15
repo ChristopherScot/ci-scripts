@@ -65,10 +65,18 @@ type Config struct {
 	// metrics at all and the absence is silent.
 	MetricsDisabled bool `yaml:"-"`
 
-	// Overrides replace a generated file wholesale, for the cases the
-	// schema cannot express. Prefer widening the schema; this is the
-	// escape hatch, not the first resort. The ImageURL placeholder is
-	// substituted so an override still tracks the built image.
+	// Patches adjust generated manifests without taking ownership of them.
+	// Keyed by resource kind (Deployment, Service, CronJob, Ingress...),
+	// each value is a YAML fragment strategically merged into that
+	// resource. Supply only what differs: the generated base keeps
+	// flowing, so later convention changes still reach this service.
+	Patches map[string]string `yaml:"patches,omitempty"`
+
+	// Overrides replace a generated file wholesale. This opts the service
+	// OUT of every future convention change for that file - a new PSA
+	// level, a probe timing fix, a securityContext tightening will all
+	// silently skip it. Reach for `patches` first; this exists for the
+	// cases a merge genuinely cannot express.
 	Overrides map[string]string `yaml:"overrides,omitempty"`
 }
 
@@ -115,7 +123,7 @@ var knownTopLevelKeys = map[string]bool{
 	"kind": true, "schedule": true, "timeZone": true,
 	"replicas": true, "port": true, "image": true, "env": true,
 	"secrets": true, "ingress": true, "probes": true, "resources": true,
-	"overrides": true, "hardened": true, "metrics": true,
+	"overrides": true, "patches": true, "hardened": true, "metrics": true,
 }
 
 func (c *Config) UnmarshalYAML(value *yaml.Node) error {

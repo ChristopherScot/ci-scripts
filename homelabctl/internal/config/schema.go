@@ -115,10 +115,16 @@ const Schema = `{
         "memoryLimit": { "type": "string", "default": "64Mi" }
       }
     },
+    "patches": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Adjust generated manifests without owning them. Keyed by resource kind (Deployment, Service, CronJob, Ingress, Namespace); each value is a YAML fragment merged into that resource. Supply only what differs so later convention changes still apply.",
+      "examples": [{ "Deployment": "spec:\n  template:\n    metadata:\n      annotations:\n        example.com/team: platform\n" }]
+    },
     "overrides": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Replace a generated file wholesale. Prefer widening the schema; {{ .ImageURL }} is substituted."
+      "description": "Replace a generated file wholesale. This opts the service OUT of future convention changes for that file - prefer patches. {{ .ImageURL }} is substituted."
     }
   }
 }

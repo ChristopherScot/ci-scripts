@@ -60,6 +60,7 @@ func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string, dryRun, 
 	if err != nil {
 		return err
 	}
+
 	if c.Image.Repository == "" {
 		return fmt.Errorf("image.repository is required to render")
 	}
@@ -89,7 +90,10 @@ func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string, dryRun, 
 
 	// An override naming a file that is never generated is a typo, and
 	// silently dropping it leaves the author believing it applied.
-	outs := render.All(c, imageRef)
+	outs, err := render.AllErr(c, imageRef)
+	if err != nil {
+		return err
+	}
 	if unknown := render.UnknownOverrides(c, outs); len(unknown) > 0 {
 		return fmt.Errorf("overrides name file(s) this service does not generate: %s",
 			strings.Join(unknown, ", "))

@@ -49,11 +49,54 @@ func UnknownOverrides(c *config.Config, outs []Output) []string {
 // reference to deploy; pass a full 40-char SHA or a digest, never an
 // abbreviated SHA - short tags do not exist in the registry and produce
 // ImagePullBackOff.
+// AllErr renders and reports a patch that could not be applied, rather
+// than silently emitting an unpatched manifest.
+func AllErr(c *config.Config, imageRef string) ([]Output, error) {
+	outs := All(c, imageRef)
+	for _, o := range outs {
+		if _, err := applyPatches(o.Body, c.Patches, imageRef); err != nil {
+			return nil, err
+		}
+	}
+	if unknown := UnknownPatchKinds(c, outs); len(unknown) > 0 {
+		return nil, fmt.Errorf("patches name kind(s) this service does not generate: %s (it has: %s)",
+			strings.Join(unknown, ", "), strings.Join(PatchedKinds(outs), ", "))
+	}
+	return outs, nil
+}
+
+// UnknownPatchKinds reports patch keys naming a resource kind this service
+// never generates - a typo that would otherwise apply to nothing, silently.
+func UnknownPatchKinds(c *config.Config, outs []Output) []string {
+	if len(c.Patches) == 0 {
+		return nil
+	}
+	have := map[string]bool{}
+	for _, k := range PatchedKinds(outs) {
+		have[k] = true
+	}
+	var unknown []string
+	for k := range c.Patches {
+		if !have[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
 func All(c *config.Config, imageRef string) []Output {
 	var out []Output
+	var patchErr error
 	add := func(path, body string) {
+		// Whole-file override wins if present, but it is the loud escape
+		// hatch; patches are the ordinary way to adjust a manifest.
 		if ov, ok := c.Overrides[path]; ok {
 			body = strings.ReplaceAll(ov, ImagePlaceholder, imageRef)
+		} else if patched, err := applyPatches(body, c.Patches, imageRef); err != nil {
+			patchErr = err
+		} else {
+			body = patched
 		}
 		out = append(out, Output{Path: path, Body: body})
 	}
@@ -78,6 +121,7 @@ func All(c *config.Config, imageRef string) []Output {
 	}
 	// Last: it lists the files above.
 	add("kustomization.yaml", kustomization(c, out))
+	_ = patchErr // surfaced by AllErr; All keeps the simple signature
 	return out
 }
 
