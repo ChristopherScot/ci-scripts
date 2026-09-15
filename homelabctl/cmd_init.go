@@ -393,6 +393,10 @@ func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 	fmt.Printf("    into the homelab repo as %s/\n", o.name)
 	fmt.Printf("  - copy %s/deploy/_argocd-application.yaml into\n", dir)
 	fmt.Printf("    homelab app-of-apps/apps/%s.yaml\n", o.name)
+	// The copy above is the step that reaches the cluster, and it is done
+	// by hand. Point at the command that makes it reviewable rather than
+	// leaving people to eyeball it.
+	fmt.Println("  - run `homelabctl diff` to check the copy landed as rendered")
 	// Mentioned unconditionally: init takes its config from flags, so it
 	// cannot know whether secrets will be added, and adding them later is
 	// the common case. Without this the Vault role is a step nobody knows

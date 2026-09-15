@@ -18,7 +18,7 @@ import (
 // that actually reaches the cluster was never shown to anyone before it
 // landed. This prints it.
 func diffCmd() *cobra.Command {
-	var against, imageRef string
+	var against, imageRef, repoURL string
 	cmd := &cobra.Command{
 		Use:   "diff [config.yaml]",
 		Short: "show what rendering would change in the GitOps repo",
@@ -31,17 +31,18 @@ func diffCmd() *cobra.Command {
 			if len(args) == 1 {
 				path = args[0]
 			}
-			return runDiff(path, against, imageRef)
+			return runDiff(path, against, imageRef, repoURL)
 		},
 	}
 	cmd.Flags().StringVar(&against, "against", "", "GitOps repo checkout to compare with (default: $HOMELAB_REPO or ~/homelab)")
 	// The image is not what a review is about, and rendering needs one, so
 	// default to the tag the deployed manifest already carries.
 	cmd.Flags().StringVar(&imageRef, "image", "", "image ref to render with (image refs are not compared)")
+	cmd.Flags().StringVar(&repoURL, "repo-url", "https://github.com/ChristopherScot/homelab", "repo the Application syncs from")
 	return cmd
 }
 
-func runDiff(cfgPath, against, imageRef string) error {
+func runDiff(cfgPath, against, imageRef, repoURL string) error {
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -88,6 +89,25 @@ func runDiff(cfgPath, against, imageRef string) error {
 		fmt.Printf("\n--- %s\n", o.Path)
 		printDiff(string(live), o.Body)
 		changed = append(changed, o.Path)
+	}
+
+	// The Argo Application lives in the app-of-apps directory rather than
+	// the service directory, and it is the file that decides whether the
+	// service is synced at all - the most consequential one to get wrong,
+	// and the one most easily forgotten in a hand copy.
+	appPath := filepath.Join(against, "app-of-apps", "apps", c.AppName()+".yaml")
+	want := render.Application(c, repoURL, c.AppName())
+	switch live, err := os.ReadFile(appPath); {
+	case os.IsNotExist(err):
+		fmt.Printf("\n--- app-of-apps/apps/%s.yaml (missing; Argo is not syncing this service)\n", c.AppName())
+		printDiff("", want)
+		changed = append(changed, "app-of-apps/apps/"+c.AppName()+".yaml")
+	case err != nil:
+		return err
+	case normalise(string(live)) != normalise(want):
+		fmt.Printf("\n--- app-of-apps/apps/%s.yaml\n", c.AppName())
+		printDiff(string(live), want)
+		changed = append(changed, "app-of-apps/apps/"+c.AppName()+".yaml")
 	}
 
 	// A file in the repo that render no longer produces is drift too - it
