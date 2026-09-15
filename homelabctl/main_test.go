@@ -1,7 +1,7 @@
 package main
 
 import (
-	"strings"
+	"errors"
 	"testing"
 )
 
@@ -71,7 +71,7 @@ func TestIsNewer(t *testing.T) {
 // render must refuse one rather than generate a manifest that cannot pull.
 func TestRenderRejectsAbbreviatedSHA(t *testing.T) {
 	err := runRender("nonexistent.yaml", "ghcr.io/o/x:abc1234", ".", "", "", "")
-	if err == nil || !strings.Contains(err.Error(), "abbreviated") {
-		t.Errorf("runRender with short SHA = %v, want an abbreviated-SHA error", err)
+	if !errors.Is(err, errAbbreviatedSHA) {
+		t.Errorf("runRender with short SHA = %v, want errAbbreviatedSHA", err)
 	}
 }

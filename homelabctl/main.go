@@ -19,6 +19,9 @@ func rootCmd() *cobra.Command {
 		// Usage on every error buries the error itself; cobra still prints
 		// usage for genuine usage mistakes.
 		SilenceUsage: true,
+		// Cobra prints the error itself; main prints it too, so without
+		// this every failure appears twice.
+		SilenceErrors: true,
 	}
 	root.AddCommand(initCmd(), renderCmd(), checkCmd(), updateCmd(), versionCmd())
 

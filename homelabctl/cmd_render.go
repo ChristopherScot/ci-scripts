@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,10 @@ import (
 // and fail only at pull time, as ImagePullBackOff with the app still
 // showing Synced.
 var shortSHA = regexp.MustCompile(`:[0-9a-f]{7,12}$`)
+
+// errAbbreviatedSHA is a sentinel so callers and tests can recognise this
+// without matching on the message text.
+var errAbbreviatedSHA = errors.New("image ref ends in an abbreviated SHA; registry tags are full 40-char SHAs or digests")
 
 func renderCmd() *cobra.Command {
 	var out, appOut, repoURL, appPath string
@@ -40,7 +45,7 @@ func renderCmd() *cobra.Command {
 func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string) error {
 
 	if shortSHA.MatchString(imageRef) {
-		return fmt.Errorf("image ref %q ends in an abbreviated SHA; registry tags are full 40-char SHAs or digests", imageRef)
+		return fmt.Errorf("%q: %w", imageRef, errAbbreviatedSHA)
 	}
 
 	c, err := config.Load(cfgPath)

@@ -75,11 +75,11 @@ func runCheck(dir string) error {
 		}
 	}
 
+	// Return the problems rather than printing them and returning a count:
+	// the caller prints once, and the error carries the actual content.
 	if len(problems) > 0 {
-		for _, p := range problems {
-			fmt.Fprintln(os.Stderr, "ERROR: "+p)
-		}
-		return fmt.Errorf("%d problem(s) found", len(problems))
+		return fmt.Errorf("%d problem(s) in %s:\n  - %s",
+			len(problems), dir, strings.Join(problems, "\n  - "))
 	}
 	fmt.Println("deploy manifests OK")
 	return nil

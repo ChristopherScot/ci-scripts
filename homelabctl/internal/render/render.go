@@ -79,7 +79,17 @@ func kustomization(c *config.Config, out []Output) string {
 }
 
 func namespace(c *config.Config) string {
-	return fmt.Sprintf("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n", c.Namespace)
+	// Pod Security Admission enforces at the namespace what the container
+	// securityContext merely requests: without this, setting
+	// `hardened: false` silently deploys an unconstrained pod.
+	return fmt.Sprintf(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: %s
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+`, c.Namespace)
 }
 
 func deployment(c *config.Config, imageRef string) string {
@@ -113,7 +123,7 @@ spec:
     spec:
       # Required by the restricted Pod Security Standard, and the cheapest
       # hardening available.
-      # Longer than the server's 20s drain so shutdown finishes before
+%s      # Longer than the server's 20s drain so shutdown finishes before
       # SIGKILL.
       terminationGracePeriodSeconds: 30
       securityContext:
@@ -124,7 +134,7 @@ spec:
           image: %s
           ports:
             - containerPort: %d
-`, c.Name, c.Namespace, c.Name, c.Team, c.Replicas, c.Name, metricsAnnotations(c), c.Name, c.Team, c.Name, imageRef, c.Port)
+`, c.Name, c.Namespace, c.Name, c.Team, c.Replicas, c.Name, metricsAnnotations(c), c.Name, c.Team, serviceAccountName(c), c.Name, imageRef, c.Port)
 
 	b.WriteString("          env:\n")
 	fmt.Fprintf(&b, "            - name: PORT\n              value: %q\n", fmt.Sprintf("%d", c.Port))
@@ -183,6 +193,18 @@ spec:
 `)
 	}
 	return b.String()
+}
+
+// serviceAccountName runs the pod under the ServiceAccount the Vault role
+// is bound to. Without it the pod runs as `default`, so the per-app
+// identity the ExternalSecret sets up is not the identity the workload
+// actually has - which only bites once something gives the pod direct
+// Vault or API access.
+func serviceAccountName(c *config.Config) string {
+	if c.Secrets == nil {
+		return ""
+	}
+	return fmt.Sprintf("      serviceAccountName: %s\n", c.Name)
 }
 
 // metricsAnnotations wires the pod into the cluster's metrics collection.

@@ -1,13 +1,46 @@
 import { createServer } from 'node:http'
 
 const port = process.env.PORT || '{{ .Port }}'
+const started = Date.now()
 
-createServer((req, res) => {
+// The deployment annotates this pod for scraping at /metrics. Without a
+// handler here Alloy would scrape the catch-all, get a 200, and fail to
+// parse the body - which reads as a data problem rather than a missing
+// endpoint. Minimal exposition rather than a dependency; swap in prom-client
+// when this service has metrics worth naming.
+function metrics() {
+  const up = Math.floor((Date.now() - started) / 1000)
+  return [
+    '# HELP process_uptime_seconds Seconds since process start.',
+    '# TYPE process_uptime_seconds gauge',
+    `process_uptime_seconds ${up}`,
+    '# HELP nodejs_heap_used_bytes Heap in use.',
+    '# TYPE nodejs_heap_used_bytes gauge',
+    `nodejs_heap_used_bytes ${process.memoryUsage().heapUsed}`,
+    '',
+  ].join('\n')
+}
+
+const server = createServer((req, res) => {
   if (req.url === '/healthz') {
     res.writeHead(200).end('ok\n')
     return
   }
+  if (req.url === '/metrics') {
+    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' }).end(metrics())
+    return
+  }
   res.writeHead(200).end('{{ .Name }}\n')
-}).listen(port, '0.0.0.0', () => {
+})
+
+server.listen(port, '0.0.0.0', () => {
   console.log(JSON.stringify({ msg: 'started', addr: ':' + port }))
 })
+
+// Without this, SIGTERM kills in-flight requests on every deploy.
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    console.log(JSON.stringify({ msg: 'shutting down' }))
+    server.close(() => process.exit(0))
+  })
+}

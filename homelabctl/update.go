@@ -136,12 +136,12 @@ func installFrom(url string) error {
 		return fmt.Errorf("download returned %s", resp.Status)
 	}
 
-	exec, err := os.Executable()
+	binPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate executable: %w", err)
 	}
 	// Resolve symlinks so we replace the real file, not a link to it.
-	exec, err = filepath.EvalSymlinks(exec)
+	binPath, err = filepath.EvalSymlinks(binPath)
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
@@ -168,7 +168,7 @@ func installFrom(url string) error {
 			return fmt.Errorf("binary is %d bytes, over the %d limit", h.Size, maxBinarySize)
 		}
 
-		tmp := exec + ".new"
+		tmp := binPath + ".new"
 		f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 		if err != nil {
 			return fmt.Errorf("create %s: %w", tmp, err)
@@ -184,13 +184,13 @@ func installFrom(url string) error {
 			return fmt.Errorf("binary exceeded the %d byte limit", maxBinarySize)
 		}
 
-		old := exec + ".old"
-		if err := os.Rename(exec, old); err != nil {
+		old := binPath + ".old"
+		if err := os.Rename(binPath, old); err != nil {
 			os.Remove(tmp)
 			return fmt.Errorf("move current binary aside: %w", err)
 		}
-		if err := os.Rename(tmp, exec); err != nil {
-			os.Rename(old, exec) // put it back
+		if err := os.Rename(tmp, binPath); err != nil {
+			os.Rename(old, binPath) // put it back
 			os.Remove(tmp)
 			return fmt.Errorf("install new binary: %w", err)
 		}

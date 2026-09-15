@@ -88,10 +88,6 @@ type Runtime interface {
 	// SupportsHardened reports whether images from this runtime can run
 	// non-root with a read-only root filesystem.
 	SupportsHardened() bool
-
-	// Deployable reports whether this runtime produces Kubernetes
-	// manifests and an Argo Application. False for a CLI.
-	Deployable() bool
 }
 
 var registry = map[string]Runtime{}

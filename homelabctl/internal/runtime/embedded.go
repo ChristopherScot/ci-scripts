@@ -35,7 +35,6 @@ type embedded struct {
 }
 
 func (e embedded) Name() string           { return e.name }
-func (e embedded) Deployable() bool       { return e.deployable }
 func (e embedded) SupportsHardened() bool { return e.hardened }
 
 func (e embedded) read(name string) string {
@@ -64,7 +63,7 @@ func (e embedded) render(name string, p Params) string {
 // deployable runtime simply has no Dockerfile, so callers never ask "what
 // kind is this?" - they ask what they were given.
 func (e embedded) Artifacts(p Params) Artifacts {
-	a := Artifacts{Files: e.files_(p), Deployable: e.deployable}
+	a := Artifacts{Files: e.renderFiles(p), Deployable: e.deployable}
 	if e.deployable {
 		a.Dockerfile = e.render("Dockerfile", p)
 	}
@@ -80,7 +79,7 @@ func (e embedded) buildSteps(p Params) string {
 	return strings.TrimRight(e.render("steps.yaml", p), "\n") + "\n"
 }
 
-func (e embedded) files_(p Params) []File {
+func (e embedded) renderFiles(p Params) []File {
 	out := make([]File, 0, len(e.files))
 	for src, dst := range e.files {
 		body := e.read(src)

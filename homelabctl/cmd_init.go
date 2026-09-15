@@ -83,8 +83,16 @@ func runInit(o initOpts) error {
 	if err != nil {
 		return err
 	}
+	// The securityContext defaults to hardened, so a runtime that cannot
+	// run as uid 65532 would produce a pod that cannot exec its binary -
+	// "permission denied", no logs. Refuse the combination up front.
+	if c.Hardened() && !r.SupportsHardened() {
+		return fmt.Errorf("runtime %q cannot run hardened; set `hardened: false` in homelab.yaml", r.Name())
+	}
 
-	isCLI := !r.Deployable()
+	// One source of truth: the artifacts the runtime actually produces.
+	arts := r.Artifacts(artifactParams(o, c))
+	isCLI := !arts.Deployable
 	if err := confirm(o, c, isCLI); err != nil {
 		return err
 	}
@@ -118,6 +126,44 @@ func runInit(o initOpts) error {
 	}
 	printNext(o, c, target, isCLI)
 	return nil
+}
+
+// tidy resolves the generated module's dependencies. Best-effort: a
+// missing toolchain or no network should not lose the scaffold, but it is
+// reported, because the result will not build until it is run.
+func tidy(dir, runtimeName string) error {
+	var cmd *exec.Cmd
+	switch {
+	case strings.HasPrefix(runtimeName, "go-"):
+		cmd = exec.Command("go", "mod", "tidy")
+	case strings.HasPrefix(runtimeName, "node-"):
+		// Generates package-lock.json, which the Dockerfile's `npm ci`
+		// requires and which is not otherwise created.
+		cmd = exec.Command("npm", "install", "--package-lock-only")
+	default:
+		return nil
+	}
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s in %s: %w\n%s", strings.Join(cmd.Args, " "), dir, err, out)
+	}
+	return nil
+}
+
+// artifactParams derives the render inputs from the options and config, so
+// the monorepo layout is decided in one place.
+func artifactParams(o initOpts, c *config.Config) runtime.Params {
+	p := runtime.Params{
+		Name:   o.name,
+		Module: fmt.Sprintf("github.com/%s/%s", o.owner, o.name),
+		Owner:  o.owner,
+		Port:   o.port,
+		Image:  c.Image.Repository,
+	}
+	if o.parentRepo != "" {
+		p.PathFilter = filepath.Join("services", o.name)
+	}
+	return p
 }
 
 func buildConfig(o initOpts) (*config.Config, error) {
@@ -239,17 +285,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	p := runtime.Params{
-		Name:   o.name,
-		Module: fmt.Sprintf("github.com/%s/%s", o.owner, o.name),
-		Owner:  o.owner,
-		Port:   o.port,
-		Image:  c.Image.Repository,
-	}
-	if o.parentRepo != "" {
-		p.PathFilter = filepath.Join("services", o.name)
-	}
-	a := r.Artifacts(p)
+	a := r.Artifacts(artifactParams(o, c))
 
 	var written, skipped []string
 	put := func(path, body string, mode uint32) error {
@@ -306,6 +342,13 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		if err := writeFile(appPath, render.Application(c, appRepo, o.name), 0); err != nil {
 			return err
 		}
+	}
+
+	// Resolve dependencies so the scaffold builds immediately. Without a
+	// go.sum, Go refuses to build at all - it will not fetch on demand -
+	// so a template that declares any dependency is dead on arrival.
+	if err := tidy(dir, r.Name()); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
 	fmt.Println()

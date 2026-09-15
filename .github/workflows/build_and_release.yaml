@@ -2,6 +2,9 @@ name: Build and Release
 
 on:
   push:
+    # main only: without this, a VERSION bump on any branch publishes a
+    # release. v1.0.0 shipped from an unmerged PR branch that way.
+    branches: [main]
     paths:
       - "VERSION"
 
