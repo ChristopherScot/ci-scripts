@@ -26,14 +26,18 @@ func renderCmd() *cobra.Command {
 	var out, appOut, repoURL, appPath string
 	var dryRun, force bool
 	cmd := &cobra.Command{
-		Use:   "render <config.yaml> <image-ref>",
+		Use:   "render [config.yaml] <image-ref>",
 		Short: "render manifests from a config",
 		Long: "Render manifests. Used by CI and to regenerate after a convention\n" +
 			"change. image-ref must be a full SHA or digest - an abbreviated SHA\n" +
 			"is not a registry tag and yields ImagePullBackOff.",
-		Args: cobra.ExactArgs(2),
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runRender(args[0], args[1], out, appOut, repoURL, appPath, dryRun, force)
+			cfg, imageRef := defaultConfigPath, args[0]
+			if len(args) == 2 {
+				cfg, imageRef = args[0], args[1]
+			}
+			return runRender(cfg, imageRef, out, appOut, repoURL, appPath, dryRun, force)
 		},
 	}
 	cmd.Flags().StringVar(&out, "out", ".", "directory to write manifests into")

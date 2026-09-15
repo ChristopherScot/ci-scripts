@@ -112,6 +112,9 @@ func latestRelease() (*githubRelease, error) {
 func isNewer(latest, current string) bool {
 	l, c := strings.Split(latest, "."), strings.Split(current, ".")
 	for i := 0; i < len(l) && i < len(c); i++ {
+		// A non-numeric component (a prerelease suffix, say) parses as 0
+		// rather than blocking the comparison: a malformed tag should not
+		// stop someone updating.
 		var ln, cn int
 		_, _ = fmt.Sscanf(l[i], "%d", &ln)
 		_, _ = fmt.Sscanf(c[i], "%d", &cn)

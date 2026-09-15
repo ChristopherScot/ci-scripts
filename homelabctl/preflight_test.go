@@ -66,3 +66,29 @@ func TestNoFindingWhenServiceAccountMatches(t *testing.T) {
 		t.Errorf("matching SA reported as drift: %+v", f)
 	}
 }
+
+// Removing `secrets:` makes render drop serviceAccountName entirely, so the
+// pod silently reverts to the default account - an identity change that is
+// invisible in a diff unless you notice a line disappeared.
+func TestDroppingSecretsRevertsToDefaultAccount(t *testing.T) {
+	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	f := checkServiceAccount(c, &liveState{ServiceAccount: "svc"})
+	if len(f) != 1 || !f[0].Blocking {
+		t.Fatalf("expected a blocking finding, got %+v", f)
+	}
+	if !strings.Contains(f[0].Message, "default") {
+		t.Errorf("finding should say the pod reverts to the default account: %s", f[0].Message)
+	}
+}
+
+// A pod that never had a ServiceAccount reports "default"; that is not drift.
+func TestDefaultAccountIsNotDrift(t *testing.T) {
+	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000}
+	_ = c.Validate()
+	if f := checkServiceAccount(c, &liveState{ServiceAccount: "default"}); len(f) != 0 {
+		t.Errorf("an unset ServiceAccount reported as drift: %+v", f)
+	}
+}

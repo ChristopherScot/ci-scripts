@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -214,15 +215,7 @@ func (c *Config) Validate() error {
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("invalid config:\n  - %s", joinLines(errs))
+		return fmt.Errorf("invalid config:\n  - %s", strings.Join(errs, "\n  - "))
 	}
 	return nil
-}
-
-func joinLines(s []string) string {
-	out := s[0]
-	for _, x := range s[1:] {
-		out += "\n  - " + x
-	}
-	return out
 }

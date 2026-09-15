@@ -92,8 +92,29 @@ func checkEnvDrift(c *config.Config, live *liveState) []Finding {
 // renaming here without rebinding there leaves the store unable to
 // authenticate, with the secret silently stale.
 func checkServiceAccount(c *config.Config, live *liveState) []Finding {
-	if c.Secrets == nil || live.ServiceAccount == "" || live.ServiceAccount == c.Name {
+	// render emits serviceAccountName only when secrets are declared, so
+	// that is what the regenerated pod would run as.
+	want := ""
+	if c.Secrets != nil {
+		want = c.Name
+	}
+	got := live.ServiceAccount
+	if got == "default" {
+		got = "" // a pod with no SA set reports "default"
+	}
+	if got == want {
 		return nil
+	}
+	if want == "" {
+		return []Finding{{
+			Blocking: true,
+			Message: fmt.Sprintf("this would drop serviceAccountName %q, reverting the pod to the default account",
+				live.ServiceAccount),
+			Fix: "the config no longer declares `secrets:`; re-add it, or confirm the pod should lose that identity",
+		}}
+	}
+	if got == "" {
+		return nil // nothing to rename from
 	}
 	return []Finding{{
 		Blocking: true,

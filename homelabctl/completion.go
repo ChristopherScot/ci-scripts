@@ -55,7 +55,9 @@ func installCompletion(binary, shell, file string) error {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
-		return fmt.Errorf("for fish, run: %s completion fish > %s/%s.fish", binary, dir, binary)
+		fmt.Printf("fish autoloads completions; write one with:\n  %s completion fish > %s/%s.fish\n",
+			binary, dir, binary)
+		return nil
 	default:
 		return fmt.Errorf("unsupported shell %q (use bash, zsh or fish)", shell)
 	}

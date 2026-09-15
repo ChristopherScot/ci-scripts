@@ -17,7 +17,7 @@ func mustConfig(t *testing.T, c *config.Config) *config.Config {
 
 func base() *config.Config {
 	return &config.Config{
-		Name: "svc", Team: "t", Runtime: "go", Port: 3000,
+		Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
 		Image: config.Image{Repository: "ghcr.io/o/svc"},
 	}
 }

@@ -33,15 +33,24 @@ Implement `runtime.Runtime` and call `Register` from an `init`. Nothing
 else changes — manifests, the Argo Application, the image-updater
 annotations and CI are identical across languages.
 
-```go
-func init() { Register(python{}) }
+A runtime is usually **no Go code at all**: a directory of template files
+under `internal/runtime/templates/<name>/`, plus one entry in
+`registered.go`.
 
-func (python) Name() string           { return "python" }
-func (python) SupportsHardened() bool { return true }
-func (python) Dockerfile(p Params) string { ... }
-func (python) BuildSteps(p Params) string { ... }
-func (python) Files(p Params) []File      { ... }
+```go
+Register(embedded{
+    name: "python-service", dir: "python-service",
+    deployable: true, hardened: true,
+    files: map[string]string{
+        "main.py.tmpl":    "main.py",
+        "gitignore":       ".gitignore",
+    },
+})
 ```
+
+The directory supplies `Dockerfile`, `steps.yaml` (the CI build steps) and
+`workflow.yaml`, each rendered with the service's `Params`. Write Go only
+if a runtime needs behaviour the templates cannot express.
 
 Three ship today:
 
@@ -76,7 +85,7 @@ prefer widening the schema.
 ```yaml
 name: approvald
 team: me-myself-and-i
-runtime: go
+runtime: go-service
 port: 3000
 image:
   repository: ghcr.io/christopherscot/approvald
