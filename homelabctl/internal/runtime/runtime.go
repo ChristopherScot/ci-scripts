@@ -28,21 +28,40 @@ type File struct {
 type Params struct {
 	Name   string
 	Module string // import path / package name
+	Owner  string // GitHub owner, for a CLI's self-update endpoint
 	Port   int
 }
 
-// Runtime describes how to build and containerise one language.
+// Kind distinguishes shapes that need fundamentally different artifacts. A
+// service is containerised and deployed to the cluster; a CLI is built for
+// several platforms and published as release assets, with no image,
+// manifests or Argo Application at all.
+type Kind int
+
+const (
+	KindService Kind = iota
+	KindCLI
+)
+
+// Runtime describes how to build one kind of thing in one language.
 type Runtime interface {
-	// Name is the value used in config.yaml's `runtime:` field.
+	// Name is the value used in config.yaml's `runtime:` field, e.g.
+	// go-service, node-service, go-cli.
 	Name() string
+
+	// Kind says what artifacts this runtime produces. Everything that only
+	// applies to deployed services - Dockerfile, manifests, the Argo
+	// Application - is skipped for KindCLI.
+	Kind() Kind
 
 	// Files are the source files a new service starts with.
 	Files(p Params) []File
 
-	// Dockerfile is the container build for this language. It must produce
-	// an image that runs as uid 65532, or SupportsHardened must be false -
-	// otherwise the pod cannot exec its binary under the default
-	// securityContext, which fails with "permission denied" and no logs.
+	// Dockerfile is the container build. Only meaningful for KindService;
+	// a CLI runtime returns "". It must produce an image that runs as uid
+	// 65532, or SupportsHardened must be false - otherwise the pod cannot
+	// exec its binary under the default securityContext, which fails with
+	// "permission denied" and no logs.
 	Dockerfile(p Params) string
 
 	// BuildSteps are the CI steps that produce the build artifacts the

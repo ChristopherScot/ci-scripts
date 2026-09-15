@@ -23,6 +23,7 @@ var templates embed.FS
 type embedded struct {
 	name     string
 	dir      string
+	kind     Kind
 	hardened bool
 
 	// files maps a template file to the path it is written to in the
@@ -32,6 +33,7 @@ type embedded struct {
 }
 
 func (e embedded) Name() string           { return e.name }
+func (e embedded) Kind() Kind             { return e.kind }
 func (e embedded) SupportsHardened() bool { return e.hardened }
 
 func (e embedded) read(name string) string {
@@ -56,7 +58,13 @@ func (e embedded) render(name string, p Params) string {
 	return buf.String()
 }
 
-func (e embedded) Dockerfile(p Params) string { return e.render("Dockerfile", p) }
+// Dockerfile is empty for a CLI, which is never containerised.
+func (e embedded) Dockerfile(p Params) string {
+	if e.kind != KindService {
+		return ""
+	}
+	return e.render("Dockerfile", p)
+}
 
 func (e embedded) BuildSteps(p Params) string {
 	// Steps are plain YAML, but rendered anyway so a runtime can vary them

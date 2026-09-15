@@ -14,15 +14,11 @@ import (
 	"strings"
 )
 
-// Version is set at build time via ldflags; "dev" for local builds, which
-// deliberately refuse to self-update.
-var Version = "dev"
-
 const (
-	repoOwner = "ChristopherScot"
-	repoName  = "ci-scripts"
+	repoOwner = "{{ .Owner }}"
+	repoName  = "{{ .Name }}"
 
-	// A homelabctl binary is a few MB; anything near this is not our asset.
+	// A {{ .Name }} binary is a few MB; anything near this is not our asset.
 	maxBinarySize = 100 * 1024 * 1024
 )
 
@@ -64,11 +60,11 @@ func runUpdate(args []string) error {
 	}
 	fmt.Printf("new version available: %s\n", rel.TagName)
 	if *checkOnly {
-		fmt.Println("run 'homelabctl update' to install it")
+		fmt.Println("run '{{ .Name }} update' to install it")
 		return nil
 	}
 
-	want := fmt.Sprintf("homelabctl_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	want := fmt.Sprintf("{{ .Name }}_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	var url string
 	for _, a := range rel.Assets {
 		if a.Name == want {
@@ -149,12 +145,12 @@ func installFrom(url string) error {
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return fmt.Errorf("archive contained no homelabctl binary")
+			return fmt.Errorf("archive contained no {{ .Name }} binary")
 		}
 		if err != nil {
 			return fmt.Errorf("read archive: %w", err)
 		}
-		if h.Name != "homelabctl" && h.Name != "./homelabctl" {
+		if h.Name != "{{ .Name }}" && h.Name != "./{{ .Name }}" {
 			continue
 		}
 		if h.Size > maxBinarySize {

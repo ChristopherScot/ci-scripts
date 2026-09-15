@@ -4,7 +4,8 @@ Scaffolds services and renders their Kubernetes manifests. One tool, one
 config schema, one place that encodes the cluster's conventions.
 
 ```sh
-homelabctl init myservice --runtime go --host myservice.example.com --public
+homelabctl init myservice --runtime go-service --host myservice.example.com --public
+homelabctl init mytool --runtime go-cli
 homelabctl render homelab.yaml ghcr.io/owner/svc@sha256:...  --out .
 homelabctl check deploy
 homelabctl update
@@ -42,7 +43,17 @@ func (python) BuildSteps(p Params) string { ... }
 func (python) Files(p Params) []File      { ... }
 ```
 
-`go` and `node` ship today.
+Three ship today:
+
+| runtime | kind | produces |
+|---|---|---|
+| `go-service` | service | image + manifests + Argo Application |
+| `node-service` | service | image + manifests + Argo Application |
+| `go-cli` | cli | cross-compiled release assets, with self-update |
+
+A CLI is not deployed, so it gets no Dockerfile, no manifests and no Argo
+Application. Its CI cross-compiles on a VERSION bump and publishes assets
+named to match what its generated `update` command looks for.
 
 ## Things that fail silently, and what this tool does about them
 

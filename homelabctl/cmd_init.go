@@ -36,7 +36,7 @@ type initOpts struct {
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	var o initOpts
-	fs.StringVar(&o.runtimeID, "runtime", "go", "runtime: "+strings.Join(runtime.Names(), ", "))
+	fs.StringVar(&o.runtimeID, "runtime", "go-service", "runtime: "+strings.Join(runtime.Names(), ", "))
 	fs.StringVar(&o.team, "team", "me-myself-and-i", "owning team")
 	fs.StringVar(&o.host, "host", "", "ingress hostname (omit for no ingress)")
 	fs.BoolVar(&o.public, "public", false, "route via the internet-facing ingress controller")
@@ -71,12 +71,14 @@ func runInit(args []string) error {
 		return err
 	}
 
-	if err := confirm(o, c); err != nil {
+	if err := confirm(o, c, r.Kind() == runtime.KindCLI); err != nil {
 		return err
 	}
 	if o.dryRun {
 		return nil
 	}
+	isCLI := r.Kind() == runtime.KindCLI
+	_ = isCLI
 
 	// Remote first, so the local tree ends up inside a real clone with a
 	// remote already set, rather than files you then have to wire up.
@@ -91,7 +93,7 @@ func runInit(args []string) error {
 		dir = o.parentRepo
 	}
 	if o.remoteOnly {
-		printNext(o, c, dir)
+		printNext(o, c, dir, r.Kind() == runtime.KindCLI)
 		return nil
 	}
 
@@ -102,7 +104,7 @@ func runInit(args []string) error {
 	if err := setupLocal(o, c, r, target); err != nil {
 		return fmt.Errorf("local setup: %w", err)
 	}
-	printNext(o, c, target)
+	printNext(o, c, target, r.Kind() == runtime.KindCLI)
 	return nil
 }
 
@@ -127,7 +129,7 @@ func buildConfig(o initOpts) (*config.Config, error) {
 
 // confirm prints exactly what will be created before touching anything
 // remote, and defaults to no.
-func confirm(o initOpts, c *config.Config) error {
+func confirm(o initOpts, c *config.Config, isCLI bool) error {
 	vis := "public"
 	if o.private {
 		vis = "private"
@@ -142,11 +144,17 @@ func confirm(o initOpts, c *config.Config) error {
 		}
 	}
 	if !o.remoteOnly {
-		fmt.Printf("  %s source, Dockerfile and CI\n", o.runtimeID)
-		fmt.Printf("  deploy/ manifests for namespace %s\n", c.Namespace)
+		if isCLI {
+			fmt.Printf("  %s source and release CI\n", o.runtimeID)
+		} else {
+			fmt.Printf("  %s source, Dockerfile and CI\n", o.runtimeID)
+			fmt.Printf("  deploy/ manifests for namespace %s\n", c.Namespace)
+		}
 	}
-	fmt.Printf("  image %s\n", c.Image.Repository)
-	if c.Ingress != nil {
+	if !isCLI {
+		fmt.Printf("  image %s\n", c.Image.Repository)
+	}
+	if c.Ingress != nil && !isCLI {
 		class := "external (LAN)"
 		if c.Ingress.Public {
 			class = "public (internet)"
@@ -222,6 +230,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	p := runtime.Params{
 		Name:   o.name,
 		Module: fmt.Sprintf("github.com/%s/%s", o.owner, o.name),
+		Owner:  o.owner,
 		Port:   o.port,
 	}
 
@@ -244,18 +253,23 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 			return err
 		}
 	}
-	if err := put("Dockerfile", r.Dockerfile(p), 0); err != nil {
-		return err
-	}
-	if err := put("homelab.yaml", configYAML(c), 0); err != nil {
-		return err
-	}
-	// Manifests are generated rather than copied, so they reflect current
-	// conventions instead of whatever the template looked like the day the
-	// service was created. `render` regenerates them later.
-	for _, out := range render.All(c, c.Image.Repository+":latest") {
-		if err := put(filepath.Join("deploy", out.Path), out.Body, 0); err != nil {
+	// A CLI is not containerised or deployed: no Dockerfile, no manifests,
+	// no Argo Application. It builds cross-platform binaries and publishes
+	// them as release assets instead.
+	if r.Kind() == runtime.KindService {
+		if err := put("Dockerfile", r.Dockerfile(p), 0); err != nil {
 			return err
+		}
+		if err := put("homelab.yaml", configYAML(c), 0); err != nil {
+			return err
+		}
+		// Manifests are generated rather than copied, so they reflect
+		// current conventions instead of whatever the template looked like
+		// the day the service was created. `render` regenerates them later.
+		for _, out := range render.All(c, c.Image.Repository+":latest") {
+			if err := put(filepath.Join("deploy", out.Path), out.Body, 0); err != nil {
+				return err
+			}
 		}
 	}
 	wfPath := ".github/workflows/build.yaml"
@@ -268,10 +282,12 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		return err
 	}
 
-	appPath := filepath.Join(dir, "deploy", "_argocd-application.yaml")
-	appRepo := "https://github.com/" + o.owner + "/homelab"
-	if err := writeFile(appPath, render.Application(c, appRepo, o.name), 0); err != nil {
-		return err
+	if r.Kind() == runtime.KindService {
+		appPath := filepath.Join(dir, "deploy", "_argocd-application.yaml")
+		appRepo := "https://github.com/" + o.owner + "/homelab"
+		if err := writeFile(appPath, render.Application(c, appRepo, o.name), 0); err != nil {
+			return err
+		}
 	}
 
 	fmt.Println()
@@ -288,11 +304,17 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	return nil
 }
 
-func printNext(o initOpts, c *config.Config, dir string) {
+func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 	fmt.Println()
 	fmt.Println("what's next:")
 	if !o.remoteOnly {
 		fmt.Printf("  - review and commit in %s\n", dir)
+		if isCLI {
+			fmt.Println("  - bump VERSION and push; CI cross-compiles and publishes a release")
+			fmt.Println()
+			fmt.Printf("    users then install with `%s update`\n", o.name)
+			return
+		}
 		fmt.Println("  - push to main; CI builds and pushes the image")
 	}
 	fmt.Printf("  - copy %s/deploy/*.yaml (except _argocd-application.yaml)\n", dir)
@@ -307,6 +329,63 @@ func printNext(o initOpts, c *config.Config, dir string) {
 		fmt.Println("because the package is private, give image-updater a registry")
 		fmt.Println("credential or it will fail with 'unauthorized'.")
 	}
+}
+
+// cliWorkflow cross-compiles and publishes release assets, named to match
+// what the generated update command looks for. Triggered by a change to
+// VERSION rather than every push, so a release is deliberate.
+func cliWorkflow(r runtime.Runtime, p runtime.Params, o initOpts) string {
+	return `name: release ` + p.Name + `
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+` + r.BuildSteps(p) + `
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Read version
+        id: v
+        run: echo "version=$(head -n1 VERSION)" >> $GITHUB_OUTPUT
+
+      # Asset names must match what ` + p.Name + ` update looks for:
+      # ` + p.Name + `_<goos>_<goarch>.tar.gz containing the bare binary.
+      - name: Cross-compile
+        run: |
+          VERSION="${{ steps.v.outputs.version }}"
+          LDFLAGS="-s -w -X main.Version=$VERSION"
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            GOOS="${target%/*}"; GOARCH="${target#*/}"
+            mkdir -p "dist/$GOOS/$GOARCH"
+            GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS"               -o "dist/$GOOS/$GOARCH/` + p.Name + `" .
+            tar -czf "` + p.Name + `_${GOOS}_${GOARCH}.tar.gz"               -C "dist/$GOOS/$GOARCH" ` + p.Name + `
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.version }}
+          body_path: VERSION
+          files: ` + p.Name + `_*.tar.gz
+`
 }
 
 // splitPositional pulls the first bare argument out of args. Go's flag
@@ -374,6 +453,9 @@ image:
 }
 
 func workflow(r runtime.Runtime, p runtime.Params, o initOpts) string {
+	if r.Kind() == runtime.KindCLI {
+		return cliWorkflow(r, p, o)
+	}
 	trigger := `on:
   push:
     branches: [main]

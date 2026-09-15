@@ -16,8 +16,16 @@ func TestEveryRuntimeRendersCleanly(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Get(%q) = %v", name, err)
 			}
-			if d := r.Dockerfile(p); !strings.Contains(d, "EXPOSE 3000") {
-				t.Errorf("Dockerfile did not substitute Port:\n%s", d)
+			switch r.Kind() {
+			case KindService:
+				if d := r.Dockerfile(p); !strings.Contains(d, "EXPOSE 3000") {
+					t.Errorf("Dockerfile did not substitute Port:\n%s", d)
+				}
+			case KindCLI:
+				// A CLI is never containerised.
+				if d := r.Dockerfile(p); d != "" {
+					t.Errorf("CLI runtime produced a Dockerfile:\n%s", d)
+				}
 			}
 			if s := r.BuildSteps(p); strings.TrimSpace(s) == "" {
 				t.Error("BuildSteps is empty")
@@ -49,6 +57,39 @@ func TestHardenedRuntimesRunAsNonroot(t *testing.T) {
 		}
 		if d := r.Dockerfile(p); !strings.Contains(d, "USER 65532") {
 			t.Errorf("runtime %q claims hardened support but its Dockerfile does not USER 65532", name)
+		}
+	}
+}
+
+// A CLI ships a self-update command, which is the reason the kind exists;
+// without it users have no way to get a new version.
+func TestCLIRuntimesShipSelfUpdate(t *testing.T) {
+	p := Params{Name: "mytool", Module: "github.com/o/mytool", Owner: "o", Port: 3000}
+	for _, name := range Names() {
+		r, _ := Get(name)
+		if r.Kind() != KindCLI {
+			continue
+		}
+		var hasUpdate, hasVersion bool
+		for _, f := range r.Files(p) {
+			if f.Path == "update.go" {
+				hasUpdate = true
+				if !strings.Contains(f.Body, `repoOwner = "o"`) {
+					t.Errorf("%s: update.go did not substitute Owner", name)
+				}
+				if !strings.Contains(f.Body, `repoName  = "mytool"`) {
+					t.Errorf("%s: update.go did not substitute Name", name)
+				}
+			}
+			if f.Path == "VERSION" {
+				hasVersion = true
+			}
+		}
+		if !hasUpdate {
+			t.Errorf("CLI runtime %q ships no update.go", name)
+		}
+		if !hasVersion {
+			t.Errorf("CLI runtime %q ships no VERSION file", name)
 		}
 	}
 }
