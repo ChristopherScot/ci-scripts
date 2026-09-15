@@ -1,0 +1,12 @@
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test -race ./...
+
+      # CGO_ENABLED=0: a cgo binary links against glibc and will not run on
+      # alpine, and that only shows up at container start.
+      - name: Build
+        run: CGO_ENABLED=0 go build -o bin/app .
