@@ -20,12 +20,13 @@ func init() {
 	Register(embedded{
 		name: "go-cli", dir: "go-cli", kind: KindCLI, hardened: false,
 		files: map[string]string{
-			"go.mod.tmpl":       "go.mod",
-			"main.go.tmpl":      "main.go",
-			"update.go.tmpl":    "update.go",
-			"main_test.go.tmpl": "main_test.go",
-			"VERSION.tmpl":      "VERSION",
-			"gitignore":         ".gitignore",
+			"go.mod.tmpl":        "go.mod",
+			"main.go.tmpl":       "main.go",
+			"update.go.tmpl":     "update.go",
+			"main_test.go.tmpl":  "main_test.go",
+			"completion.go.tmpl": "completion.go",
+			"VERSION.tmpl":       "VERSION",
+			"gitignore":          ".gitignore",
 		},
 	})
 

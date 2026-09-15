@@ -1,12 +1,13 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -16,15 +17,22 @@ var (
 
 // runCheck turns the deploy failures that are otherwise silent into a red
 // build. Each of these presented as Synced/Healthy with nothing shipping.
-func runCheck(args []string) error {
-	fs := flag.NewFlagSet("check", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
+func checkCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "check [dir]",
+		Short: "fail on deploy misconfigurations that are otherwise silent",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			dir := "deploy"
+			if len(args) > 0 {
+				dir = args[0]
+			}
+			return runCheck(dir)
+		},
 	}
-	dir := "deploy"
-	if fs.NArg() > 0 {
-		dir = fs.Arg(0)
-	}
+}
+
+func runCheck(dir string) error {
 
 	var problems []string
 	add := func(f string, a ...any) { problems = append(problems, fmt.Sprintf(f, a...)) }

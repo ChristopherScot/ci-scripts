@@ -4,40 +4,69 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/spf13/cobra"
 )
 
 // Version is set at build time via ldflags; "dev" for local builds, which
 // deliberately refuse to self-update.
 var Version = "dev"
 
+func rootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "{{ .Name }}",
+		Short: "{{ .Name }}",
+		// Usage on every error buries the error itself; cobra still prints
+		// usage for genuine usage mistakes.
+		SilenceUsage: true,
+	}
+	root.AddCommand(updateCmd(), versionCmd())
+
+	// Cobra builds its own `completion` command during Execute, so it does
+	// not exist yet here and cannot be extended in place. Force it to be
+	// created now, then hang `install` off it.
+	root.InitDefaultCompletionCmd()
+	for _, c := range root.Commands() {
+		if c.Name() == "completion" {
+			c.AddCommand(completionInstallCmd("{{ .Name }}"))
+		}
+	}
+	return root
+}
+
+func versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "print the version",
+		Args:  cobra.NoArgs,
+		Run: func(_ *cobra.Command, _ []string) {
+			fmt.Println(Version)
+		},
+	}
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(1)
-	}
-	var err error
-	switch os.Args[1] {
-	case "update":
-		err = runUpdate(os.Args[2:])
-	case "version":
-		fmt.Println(Version)
-	case "-h", "--help", "help":
-		usage()
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", os.Args[1])
-		usage()
-		os.Exit(1)
-	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error: "+err.Error())
+	if err := rootCmd().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `{{ .Name }}
-
-  update [--check]   update this binary to the latest release
-  version            print the version
-`)
+// makeCompleter turns a function that lists names into a cobra completion
+// function. Completions run on every TAB, so keep the lookup fast and fail
+// quietly - returning ShellCompDirectiveError rather than nothing stops the
+// shell falling back to offering filenames, which looks like a bug.
+//
+//	cmd.ValidArgsFunction = makeCompleter(listThings)
+func makeCompleter(list func() ([]string, error)) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return func(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+		if len(args) != 0 {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		names, err := list()
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveError
+		}
+		return names, cobra.ShellCompDirectiveNoFileComp
+	}
 }

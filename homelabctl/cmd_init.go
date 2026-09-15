@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +11,7 @@ import (
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/render"
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/runtime"
+	"github.com/spf13/cobra"
 )
 
 // init is idempotent: every step checks for what it would create and skips
@@ -33,30 +33,43 @@ type initOpts struct {
 	yes        bool
 }
 
-func runInit(args []string) error {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+func initCmd() *cobra.Command {
 	var o initOpts
-	fs.StringVar(&o.runtimeID, "runtime", "go-service", "runtime: "+strings.Join(runtime.Names(), ", "))
-	fs.StringVar(&o.team, "team", "me-myself-and-i", "owning team")
-	fs.StringVar(&o.host, "host", "", "ingress hostname (omit for no ingress)")
-	fs.BoolVar(&o.public, "public", false, "route via the internet-facing ingress controller")
-	fs.IntVar(&o.port, "port", 3000, "port the service listens on")
-	fs.StringVar(&o.owner, "owner", "christopherscot", "GitHub owner")
-	fs.StringVar(&o.parentRepo, "parent-repo", "", "add this service to an existing repo (monorepo) instead of creating one")
-	fs.BoolVar(&o.private, "private", false, "create the GitHub repo private (image-updater then needs a registry credential)")
-	fs.BoolVar(&o.localOnly, "local-only", false, "generate files only; create nothing on GitHub")
-	fs.BoolVar(&o.remoteOnly, "remote-only", false, "create the GitHub repo only; generate no files")
-	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would happen and stop")
-	fs.BoolVar(&o.yes, "yes", false, "skip the confirmation prompt")
+	cmd := &cobra.Command{
+		Use:   "init <name>",
+		Short: "create a new service or CLI",
+		Long: "Create a new service, as its own repo or as services/<name>/ inside\n" +
+			"an existing one. Every step skips what already exists, so a run that\n" +
+			"fails partway can simply be run again.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			o.name = args[0]
+			return runInit(o)
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&o.runtimeID, "runtime", "go-service", "runtime: "+strings.Join(runtime.Names(), ", "))
+	f.StringVar(&o.team, "team", "me-myself-and-i", "owning team")
+	f.StringVar(&o.host, "host", "", "ingress hostname (omit for no ingress)")
+	f.BoolVar(&o.public, "public", false, "route via the internet-facing ingress controller")
+	f.IntVar(&o.port, "port", 3000, "port the service listens on")
+	f.StringVar(&o.owner, "owner", "christopherscot", "GitHub owner")
+	f.StringVar(&o.parentRepo, "parent-repo", "", "add this service to an existing repo (monorepo) instead of creating one")
+	f.BoolVar(&o.private, "private", false, "create the GitHub repo private (image-updater then needs a registry credential)")
+	f.BoolVar(&o.localOnly, "local-only", false, "generate files only; create nothing on GitHub")
+	f.BoolVar(&o.remoteOnly, "remote-only", false, "create the GitHub repo only; generate no files")
+	f.BoolVar(&o.dryRun, "dry-run", false, "print what would happen and stop")
+	f.BoolVar(&o.yes, "yes", false, "skip the confirmation prompt")
 
-	name, rest := splitPositional(args)
-	if err := fs.Parse(rest); err != nil {
-		return err
-	}
-	o.name = name
-	if o.name == "" {
-		return fmt.Errorf("usage: homelabctl init <name> [--runtime %s]", strings.Join(runtime.Names(), "|"))
-	}
+	// Completing --runtime is the one that saves real typing.
+	_ = cmd.RegisterFlagCompletionFunc("runtime",
+		func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+			return runtime.Names(), cobra.ShellCompDirectiveNoFileComp
+		})
+	return cmd
+}
+
+func runInit(o initOpts) error {
 	if o.localOnly && o.remoteOnly {
 		return fmt.Errorf("--local-only and --remote-only are mutually exclusive")
 	}

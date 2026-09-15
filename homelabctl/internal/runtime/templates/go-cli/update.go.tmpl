@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -30,13 +31,21 @@ type githubRelease struct {
 	} `json:"assets"`
 }
 
-func runUpdate(args []string) error {
-	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	checkOnly := fs.Bool("check", false, "report whether an update exists, install nothing")
-	if err := fs.Parse(args); err != nil {
-		return err
+func updateCmd() *cobra.Command {
+	var checkOnly bool
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "update this binary to the latest release",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runUpdate(checkOnly)
+		},
 	}
+	cmd.Flags().BoolVar(&checkOnly, "check", false, "report whether an update exists, install nothing")
+	return cmd
+}
 
+func runUpdate(checkOnly bool) error {
 	fmt.Printf("current version: %s\n", Version)
 
 	// A dev build has no meaningful version, and overwriting someone's
@@ -59,7 +68,7 @@ func runUpdate(args []string) error {
 		return nil
 	}
 	fmt.Printf("new version available: %s\n", rel.TagName)
-	if *checkOnly {
+	if checkOnly {
 		fmt.Println("run '{{ .Name }} update' to install it")
 		return nil
 	}
