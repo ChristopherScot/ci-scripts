@@ -31,6 +31,9 @@ type initOpts struct {
 	remoteOnly bool
 	dryRun     bool
 	yes        bool
+	// skipTidy avoids resolving dependencies, which needs a network. Set
+	// by tests; there is deliberately no flag for it.
+	skipTidy bool
 }
 
 func initCmd() *cobra.Command {
@@ -83,16 +86,17 @@ func runInit(o initOpts) error {
 	if err != nil {
 		return err
 	}
-	// The securityContext defaults to hardened, so a runtime that cannot
-	// run as uid 65532 would produce a pod that cannot exec its binary -
-	// "permission denied", no logs. Refuse the combination up front.
-	if c.Hardened() && !r.SupportsHardened() {
-		return fmt.Errorf("runtime %q cannot run hardened; set `hardened: false` in homelab.yaml", r.Name())
-	}
-
+	// Only meaningful for something that becomes a pod: the securityContext
+	// defaults to hardened, so a runtime whose image cannot run as uid
+	// 65532 would produce a pod that cannot exec its binary - "permission
+	// denied", no logs. A CLI has no pod, so hardening does not apply.
 	// One source of truth: the artifacts the runtime actually produces.
 	arts := r.Artifacts(artifactParams(o, c))
 	isCLI := !arts.Deployable
+
+	if arts.Deployable && c.Hardened() && !r.SupportsHardened() {
+		return fmt.Errorf("runtime %q cannot run hardened; set `hardened: false` in homelab.yaml", r.Name())
+	}
 	if err := confirm(o, c, isCLI); err != nil {
 		return err
 	}
@@ -317,6 +321,11 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		if err := put("homelab.yaml", configYAML(c), 0); err != nil {
 			return err
 		}
+		// Editors validate against this as you type, which is what turns a
+		// silently-ignored typo like `hardend:` into a visible squiggle.
+		if err := put("homelab.schema.json", config.Schema, 0); err != nil {
+			return err
+		}
 		// Manifests are generated rather than copied, so they reflect
 		// current conventions instead of whatever the template looked like
 		// the day the service was created. `render` regenerates them later.
@@ -347,7 +356,9 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	// Resolve dependencies so the scaffold builds immediately. Without a
 	// go.sum, Go refuses to build at all - it will not fetch on demand -
 	// so a template that declares any dependency is dead on arrival.
-	if err := tidy(dir, r.Name()); err != nil {
+	if o.skipTidy {
+		// nothing to resolve
+	} else if err := tidy(dir, r.Name()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
@@ -404,7 +415,8 @@ func writeFile(path, body string, mode uint32) error {
 
 func configYAML(c *config.Config) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `# The single source of truth for this service. `+"`homelabctl render`"+`
+	fmt.Fprintf(&b, `# yaml-language-server: $schema=homelab.schema.json
+# The single source of truth for this service. `+"`homelabctl render`"+`
 # regenerates every manifest from it, so change things here rather than
 # editing deploy/ by hand.
 name: %s
