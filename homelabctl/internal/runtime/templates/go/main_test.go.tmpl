@@ -1,0 +1,15 @@
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestHealthz(t *testing.T) {
+	w := httptest.NewRecorder()
+	healthz(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("healthz status = %d, want %d", w.Code, http.StatusOK)
+	}
+}

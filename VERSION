@@ -1,6 +1,6 @@
-v0.0.6
+v1.0.0
 
-v0.0.6 Substitute ImageURL into deployment_override
+v1.0.0 homelabctl replaces argo-update: init/render/check/update, runtime plugins
 
 v0.0.4 Allow specifying config file location
 
