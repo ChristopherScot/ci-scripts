@@ -18,10 +18,12 @@ import (
 func completionInstallCmd(binary string) *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
-		Use:       "install [bash|zsh|fish]",
-		Short:     "add shell completion to your shell config",
-		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{"bash", "zsh", "fish"},
+		Use:   "install [bash|zsh]",
+		Short: "add shell completion to your shell config",
+		// OnlyValidArgs so an unsupported shell is a usage error rather
+		// than something the switch below has to restate.
+		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+		ValidArgs: []string{"bash", "zsh"},
 		RunE: func(_ *cobra.Command, args []string) error {
 			return installCompletion(binary, args[0], file)
 		},
@@ -46,20 +48,8 @@ func installCompletion(binary, shell, file string) error {
 	case "bash":
 		rc = filepath.Join(home, ".bashrc")
 		line = fmt.Sprintf("source <(%s completion bash)", binary)
-	case "fish":
-		// fish autoloads from this directory, so there is no rc line.
-		dir := filepath.Join(home, ".config", "fish", "completions")
-		if file != "" {
-			dir = filepath.Dir(file)
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		fmt.Printf("fish autoloads completions; write one with:\n  %s completion fish > %s/%s.fish\n",
-			binary, dir, binary)
-		return nil
 	default:
-		return fmt.Errorf("unsupported shell %q (use bash, zsh or fish)", shell)
+		return fmt.Errorf("unsupported shell %q (use bash or zsh)", shell)
 	}
 
 	if file != "" {
