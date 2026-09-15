@@ -30,18 +30,47 @@ type Params struct {
 	Module string // import path / package name
 	Owner  string // GitHub owner, for a CLI's self-update endpoint
 	Port   int
+
+	// Image is the registry path CI publishes to.
+	Image string
+
+	// PathFilter is the service's directory within a monorepo, empty for a
+	// dedicated repo. It drives CI path filters and the build context, so
+	// the monorepo layout is decided once rather than at four call sites.
+	PathFilter string
+
+	// BuildSteps is filled in by the runtime before rendering its workflow.
+	BuildSteps string
 }
 
-// Kind distinguishes shapes that need fundamentally different artifacts. A
-// service is containerised and deployed to the cluster; a CLI is built for
-// several platforms and published as release assets, with no image,
-// manifests or Argo Application at all.
-type Kind int
+// Context is the Docker build context: the service directory in a
+// monorepo, the repo root otherwise.
+func (p Params) Context() string {
+	if p.PathFilter != "" {
+		return p.PathFilter
+	}
+	return "."
+}
 
-const (
-	KindService Kind = iota
-	KindCLI
-)
+// Artifacts is everything a runtime contributes to a new repo.
+//
+// Callers branch on the DATA here, not on a kind tag: a CLI simply has no
+// Dockerfile and is not Deployable, so "what does this produce" is answered
+// once, by the runtime, instead of at every call site. Adding a shape that
+// produces some other mix needs no changes outside the runtime.
+type Artifacts struct {
+	Files []File
+
+	// Dockerfile is empty for anything not containerised.
+	Dockerfile string
+
+	// Workflow is the CI that builds this runtime's artifacts.
+	Workflow string
+
+	// Deployable says whether Kubernetes manifests and an Argo Application
+	// apply. False for a CLI, which ships as release assets.
+	Deployable bool
+}
 
 // Runtime describes how to build one kind of thing in one language.
 type Runtime interface {
@@ -49,29 +78,20 @@ type Runtime interface {
 	// go-service, node-service, go-cli.
 	Name() string
 
-	// Kind says what artifacts this runtime produces. Everything that only
-	// applies to deployed services - Dockerfile, manifests, the Argo
-	// Application - is skipped for KindCLI.
-	Kind() Kind
-
-	// Files are the source files a new service starts with.
-	Files(p Params) []File
-
-	// Dockerfile is the container build. Only meaningful for KindService;
-	// a CLI runtime returns "". It must produce an image that runs as uid
-	// 65532, or SupportsHardened must be false - otherwise the pod cannot
-	// exec its binary under the default securityContext, which fails with
+	// Artifacts are everything a new repo of this runtime starts with.
+	// A containerised runtime must produce an image that runs as uid 65532
+	// or set SupportsHardened false - otherwise the pod cannot exec its
+	// binary under the default securityContext, which fails with
 	// "permission denied" and no logs.
-	Dockerfile(p Params) string
-
-	// BuildSteps are the CI steps that produce the build artifacts the
-	// Dockerfile expects, in GitHub Actions YAML (list items, 6-space
-	// indented to sit under `steps:`).
-	BuildSteps(p Params) string
+	Artifacts(p Params) Artifacts
 
 	// SupportsHardened reports whether images from this runtime can run
 	// non-root with a read-only root filesystem.
 	SupportsHardened() bool
+
+	// Deployable reports whether this runtime produces Kubernetes
+	// manifests and an Argo Application. False for a CLI.
+	Deployable() bool
 }
 
 var registry = map[string]Runtime{}

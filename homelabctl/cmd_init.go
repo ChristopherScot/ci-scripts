@@ -84,7 +84,7 @@ func runInit(o initOpts) error {
 		return err
 	}
 
-	isCLI := r.Kind() == runtime.KindCLI
+	isCLI := !r.Deployable()
 	if err := confirm(o, c, isCLI); err != nil {
 		return err
 	}
@@ -244,7 +244,12 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		Module: fmt.Sprintf("github.com/%s/%s", o.owner, o.name),
 		Owner:  o.owner,
 		Port:   o.port,
+		Image:  c.Image.Repository,
 	}
+	if o.parentRepo != "" {
+		p.PathFilter = filepath.Join("services", o.name)
+	}
+	a := r.Artifacts(p)
 
 	var written, skipped []string
 	put := func(path, body string, mode uint32) error {
@@ -260,18 +265,19 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		return nil
 	}
 
-	for _, f := range r.Files(p) {
+	for _, f := range a.Files {
 		if err := put(f.Path, f.Body, f.Mode); err != nil {
 			return err
 		}
 	}
-	// A CLI is not containerised or deployed: no Dockerfile, no manifests,
-	// no Argo Application. It builds cross-platform binaries and publishes
-	// them as release assets instead.
-	if r.Kind() == runtime.KindService {
-		if err := put("Dockerfile", r.Dockerfile(p), 0); err != nil {
+	// Nothing here asks what kind of runtime this is - a CLI simply has no
+	// Dockerfile and is not Deployable.
+	if a.Dockerfile != "" {
+		if err := put("Dockerfile", a.Dockerfile, 0); err != nil {
 			return err
 		}
+	}
+	if a.Deployable {
 		if err := put("homelab.yaml", configYAML(c), 0); err != nil {
 			return err
 		}
@@ -290,11 +296,11 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// only rebuilds what changed.
 		wfPath = filepath.Join("..", "..", ".github", "workflows", o.name+".yaml")
 	}
-	if err := put(wfPath, workflow(r, p, o), 0); err != nil {
+	if err := put(wfPath, a.Workflow, 0); err != nil {
 		return err
 	}
 
-	if r.Kind() == runtime.KindService {
+	if a.Deployable {
 		appPath := filepath.Join(dir, "deploy", "_argocd-application.yaml")
 		appRepo := "https://github.com/" + o.owner + "/homelab"
 		if err := writeFile(appPath, render.Application(c, appRepo, o.name), 0); err != nil {
@@ -343,63 +349,6 @@ func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 	}
 }
 
-// cliWorkflow cross-compiles and publishes release assets, named to match
-// what the generated update command looks for. Triggered by a change to
-// VERSION rather than every push, so a release is deliberate.
-func cliWorkflow(r runtime.Runtime, p runtime.Params) string {
-	return `name: release ` + p.Name + `
-
-on:
-  push:
-    branches: [main]
-    paths: [VERSION]
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-` + r.BuildSteps(p) + `
-  release:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Read version
-        id: v
-        run: echo "version=$(head -n1 VERSION)" >> $GITHUB_OUTPUT
-
-      # Asset names must match what ` + p.Name + ` update looks for:
-      # ` + p.Name + `_<goos>_<goarch>.tar.gz containing the bare binary.
-      - name: Cross-compile
-        run: |
-          VERSION="${{ steps.v.outputs.version }}"
-          LDFLAGS="-s -w -X main.Version=$VERSION"
-          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
-            GOOS="${target%/*}"; GOARCH="${target#*/}"
-            mkdir -p "dist/$GOOS/$GOARCH"
-            GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS"               -o "dist/$GOOS/$GOARCH/` + p.Name + `" .
-            tar -czf "` + p.Name + `_${GOOS}_${GOARCH}.tar.gz"               -C "dist/$GOOS/$GOARCH" ` + p.Name + `
-          done
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.v.outputs.version }}
-          body_path: VERSION
-          files: ` + p.Name + `_*.tar.gz
-`
-}
-
 func writeFile(path, body string, mode uint32) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -431,87 +380,4 @@ image:
 #   keys: [SOME_TOKEN]
 `)
 	return b.String()
-}
-
-func workflow(r runtime.Runtime, p runtime.Params, o initOpts) string {
-	if r.Kind() == runtime.KindCLI {
-		return cliWorkflow(r, p)
-	}
-	trigger := `on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
-`
-	checkout := "      - uses: actions/checkout@v4\n"
-	workdir := ""
-	images := "ghcr.io/${{ github.repository }}"
-	if o.parentRepo != "" {
-		// Path filter so a push rebuilds only the service that changed.
-		trigger = fmt.Sprintf(`on:
-  push:
-    branches: [main]
-    paths: ['services/%s/**', '.github/workflows/%s.yaml']
-  pull_request:
-    paths: ['services/%s/**']
-  workflow_dispatch:
-`, p.Name, p.Name, p.Name)
-		workdir = fmt.Sprintf(`
-    defaults:
-      run:
-        working-directory: services/%s
-`, p.Name)
-		images = fmt.Sprintf("ghcr.io/%s/%s-%s", o.owner, o.parentRepo, p.Name)
-	}
-
-	ctx := "."
-	if o.parentRepo != "" {
-		ctx = "services/" + p.Name
-	}
-
-	return `# Builds and pushes the image. Deployment happens in-cluster:
-# argocd-image-updater watches the registry and commits the new digest to
-# the homelab repo itself, so this workflow needs no homelab credential -
-# GITHUB_TOKEN is issued per run and can only push packages.
-name: build ` + p.Name + `
-
-` + trigger + `
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write` + workdir + `
-    steps:
-` + checkout + `
-` + r.BuildSteps(p) + `
-      - name: Check deploy manifests
-        run: |
-          curl -fsSL https://github.com/ChristopherScot/ci-scripts/releases/latest/download/homelabctl_linux_amd64.tar.gz | tar -xz
-          ./homelabctl check deploy
-
-      - uses: docker/login-action@v3
-        if: github.event_name != 'pull_request'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ` + images + `
-          # Full SHA: an abbreviated one is not a registry tag and gives
-          # ImagePullBackOff.
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=long
-
-      - uses: docker/build-push-action@v6
-        with:
-          context: ` + ctx + `
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-`
 }

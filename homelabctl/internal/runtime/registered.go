@@ -4,7 +4,7 @@ package runtime
 // directory under templates/ and an entry here - no other code changes.
 func init() {
 	Register(embedded{
-		name: "go-service", dir: "go-service", kind: KindService, hardened: true,
+		name: "go-service", dir: "go-service", deployable: true, hardened: true,
 		files: map[string]string{
 			"go.mod.tmpl":       "go.mod",
 			"main.go.tmpl":      "main.go",
@@ -18,7 +18,7 @@ func init() {
 	// cross-compiles and publishes release assets, and ships the same
 	// self-update command homelabctl uses.
 	Register(embedded{
-		name: "go-cli", dir: "go-cli", kind: KindCLI, hardened: false,
+		name: "go-cli", dir: "go-cli", deployable: false, hardened: false,
 		files: map[string]string{
 			"go.mod.tmpl":        "go.mod",
 			"main.go.tmpl":       "main.go",
@@ -31,7 +31,7 @@ func init() {
 	})
 
 	Register(embedded{
-		name: "node-service", dir: "node-service", kind: KindService, hardened: true,
+		name: "node-service", dir: "node-service", deployable: true, hardened: true,
 		files: map[string]string{
 			"package.json.tmpl": "package.json",
 			"server.js.tmpl":    "server.js",

@@ -1,0 +1,76 @@
+# Cross-compiles and publishes release assets, named to match what the
+# generated `update` command looks for. Triggered by a VERSION change so a
+# release is deliberate - but tests run on every push and PR, or a CLI repo
+# would only ever be tested at release time.
+name: {{ .Name }}
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+{{ .BuildSteps }}
+  release:
+    # Only when VERSION changed, and only from main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Release only on a VERSION change
+        id: gate
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -qx VERSION; then
+            echo "go=true" >> $GITHUB_OUTPUT
+          else
+            echo "go=false" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.gate.outputs.go == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Read version
+        if: steps.gate.outputs.go == 'true'
+        id: v
+        run: echo "version=$(head -n1 VERSION)" >> $GITHUB_OUTPUT
+
+      # Asset names must match what `{{ .Name }} update` looks for:
+      # {{ .Name }}_<goos>_<goarch>.tar.gz containing the bare binary.
+      # Version is injected here; without it a released binary reports
+      # "dev" and refuses to update itself.
+      - name: Cross-compile
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          VERSION="${{ "{{" }} steps.v.outputs.version {{ "}}" }}"
+          LDFLAGS="-s -w -X main.Version=$VERSION"
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            GOOS="${target%/*}"; GOARCH="${target#*/}"
+            mkdir -p "dist/$GOOS/$GOARCH"
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS" -o "dist/$GOOS/$GOARCH/{{ .Name }}" .
+            tar -czf "{{ .Name }}_${GOOS}_${GOARCH}.tar.gz" -C "dist/$GOOS/$GOARCH" "{{ .Name }}"
+          done
+          sha256sum {{ .Name }}_*.tar.gz > checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        if: steps.gate.outputs.go == 'true'
+        with:
+          tag_name: ${{ "{{" }} steps.v.outputs.version {{ "}}" }}
+          files: |
+            {{ .Name }}_*.tar.gz
+            checksums.txt

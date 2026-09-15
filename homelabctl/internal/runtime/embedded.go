@@ -21,10 +21,12 @@ var templates embed.FS
 // is then a data declaration plus its files; only genuinely different
 // behaviour needs Go code.
 type embedded struct {
-	name     string
-	dir      string
-	kind     Kind
-	hardened bool
+	name string
+	dir  string
+	// deployable: produces a container image and Kubernetes manifests.
+	// False for a CLI, which ships as release assets instead.
+	deployable bool
+	hardened   bool
 
 	// files maps a template file to the path it is written to in the
 	// generated service. A .tmpl suffix means it is rendered with Params;
@@ -33,7 +35,7 @@ type embedded struct {
 }
 
 func (e embedded) Name() string           { return e.name }
-func (e embedded) Kind() Kind             { return e.kind }
+func (e embedded) Deployable() bool       { return e.deployable }
 func (e embedded) SupportsHardened() bool { return e.hardened }
 
 func (e embedded) read(name string) string {
@@ -58,21 +60,27 @@ func (e embedded) render(name string, p Params) string {
 	return buf.String()
 }
 
-// Dockerfile is empty for a CLI, which is never containerised.
-func (e embedded) Dockerfile(p Params) string {
-	if e.kind != KindService {
-		return ""
+// Artifacts assembles everything this runtime contributes. A non-
+// deployable runtime simply has no Dockerfile, so callers never ask "what
+// kind is this?" - they ask what they were given.
+func (e embedded) Artifacts(p Params) Artifacts {
+	a := Artifacts{Files: e.files_(p), Deployable: e.deployable}
+	if e.deployable {
+		a.Dockerfile = e.render("Dockerfile", p)
 	}
-	return e.render("Dockerfile", p)
+	// The workflow embeds the runtime's build steps, so render those first.
+	p.BuildSteps = e.buildSteps(p)
+	a.Workflow = e.render("workflow.yaml", p)
+	return a
 }
 
-func (e embedded) BuildSteps(p Params) string {
-	// Steps are plain YAML, but rendered anyway so a runtime can vary them
-	// by port or name if it needs to.
+// buildSteps are the CI steps that produce what the Dockerfile or release
+// expects, as GitHub Actions YAML list items.
+func (e embedded) buildSteps(p Params) string {
 	return strings.TrimRight(e.render("steps.yaml", p), "\n") + "\n"
 }
 
-func (e embedded) Files(p Params) []File {
+func (e embedded) files_(p Params) []File {
 	out := make([]File, 0, len(e.files))
 	for src, dst := range e.files {
 		body := e.read(src)
