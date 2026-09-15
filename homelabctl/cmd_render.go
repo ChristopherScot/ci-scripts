@@ -90,7 +90,7 @@ func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string, dryRun, 
 
 	// An override naming a file that is never generated is a typo, and
 	// silently dropping it leaves the author believing it applied.
-	outs, err := render.AllErr(c, imageRef)
+	outs, err := render.All(c, imageRef)
 	if err != nil {
 		return err
 	}

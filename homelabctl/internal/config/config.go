@@ -191,6 +191,11 @@ const (
 
 var validKinds = map[string]bool{KindService: true, KindCronJob: true}
 
+// DefaultPort is what a service listens on when the config does not say.
+// It matches the `port` default in the JSON schema and the `init` flag;
+// all three must agree or a config is valid against one and not the other.
+const DefaultPort = 3000
+
 // IsCronJob reports whether this service runs on a schedule rather than
 // continuously.
 func (c *Config) IsCronJob() bool { return c.Kind == KindCronJob }
@@ -223,6 +228,13 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Replicas == 0 {
 		c.Replicas = 1
+	}
+	// A service without a port rendered containerPort: 0, targetPort: 0
+	// and probes against port 0: manifests that apply cleanly and describe
+	// a pod that can never pass a readiness check. 3000 is what the schema
+	// and `init` already advertise as the default.
+	if c.Port == 0 && !c.IsCronJob() {
+		c.Port = DefaultPort
 	}
 	if c.Probes == nil {
 		c.Probes = &Probes{Path: "/healthz"}

@@ -15,9 +15,9 @@ func TestPatchKeepsGeneratedConventions(t *testing.T) {
 	c.Patches = map[string]string{
 		"Deployment": "spec:\n  replicas: 3\n",
 	}
-	outs, err := AllErr(mustConfig(t, c), "ghcr.io/o/svc:latest")
+	outs, err := All(mustConfig(t, c), "ghcr.io/o/svc:latest")
 	if err != nil {
-		t.Fatalf("AllErr() = %v", err)
+		t.Fatalf("All() = %v", err)
 	}
 
 	var dep string
@@ -48,9 +48,9 @@ func TestPatchMergesNestedMapsRatherThanReplacing(t *testing.T) {
 	c.Patches = map[string]string{
 		"Deployment": "spec:\n  template:\n    metadata:\n      annotations:\n        example.com/owner: platform\n",
 	}
-	outs, err := AllErr(mustConfig(t, c), "img")
+	outs, err := All(mustConfig(t, c), "img")
 	if err != nil {
-		t.Fatalf("AllErr() = %v", err)
+		t.Fatalf("All() = %v", err)
 	}
 	for _, o := range outs {
 		if o.Path != "deployment.yaml" {
@@ -70,9 +70,9 @@ func TestPatchMergesNestedMapsRatherThanReplacing(t *testing.T) {
 func TestUnknownPatchKindIsRejected(t *testing.T) {
 	c := base()
 	c.Patches = map[string]string{"Deploymnet": "spec:\n  replicas: 3\n"}
-	_, err := AllErr(mustConfig(t, c), "img")
+	_, err := All(mustConfig(t, c), "img")
 	if err == nil || !strings.Contains(err.Error(), "Deploymnet") {
-		t.Fatalf("AllErr() = %v, want an error naming the unknown kind", err)
+		t.Fatalf("All() = %v, want an error naming the unknown kind", err)
 	}
 	// The message should say what IS available.
 	if !strings.Contains(err.Error(), "Deployment") {
@@ -83,8 +83,8 @@ func TestUnknownPatchKindIsRejected(t *testing.T) {
 func TestMalformedPatchIsReported(t *testing.T) {
 	c := base()
 	c.Patches = map[string]string{"Deployment": "spec:\n  this: is: not: yaml\n"}
-	if _, err := AllErr(mustConfig(t, c), "img"); err == nil {
-		t.Fatal("AllErr() accepted a malformed patch")
+	if _, err := All(mustConfig(t, c), "img"); err == nil {
+		t.Fatal("All() accepted a malformed patch")
 	}
 }
 
@@ -94,9 +94,9 @@ func TestPatchAppliesToCronJobKind(t *testing.T) {
 	c.Kind = config.KindCronJob
 	c.Schedule = "0 3 * * *"
 	c.Patches = map[string]string{"CronJob": "spec:\n  suspend: true\n"}
-	outs, err := AllErr(mustConfig(t, c), "img")
+	outs, err := All(mustConfig(t, c), "img")
 	if err != nil {
-		t.Fatalf("AllErr() = %v", err)
+		t.Fatalf("All() = %v", err)
 	}
 	for _, o := range outs {
 		if o.Path == "cronjob.yaml" && !strings.Contains(o.Body, "suspend: true") {
@@ -185,9 +185,9 @@ func TestWorkloadShapesShareContainerSpec(t *testing.T) {
 
 func findOutput(t *testing.T, c *config.Config, name string) string {
 	t.Helper()
-	outs, err := AllErr(c, "ghcr.io/o/svc:v1")
+	outs, err := All(c, "ghcr.io/o/svc:v1")
 	if err != nil {
-		t.Fatalf("AllErr() = %v", err)
+		t.Fatalf("All() = %v", err)
 	}
 	for _, o := range outs {
 		if o.Path == name {
@@ -196,4 +196,55 @@ func findOutput(t *testing.T, c *config.Config, name string) string {
 	}
 	t.Fatalf("no %s in rendered output", name)
 	return ""
+}
+
+// A config that omits `port` used to render containerPort: 0,
+// targetPort: 0 and probes against port 0 - manifests that apply cleanly
+// and describe a pod that can never pass a readiness check.
+func TestServiceWithoutPortGetsTheDefault(t *testing.T) {
+	c := base()
+	c.Port = 0
+	svc := mustConfig(t, c)
+	if svc.Port != config.DefaultPort {
+		t.Fatalf("Port = %d, want %d", svc.Port, config.DefaultPort)
+	}
+	for _, name := range []string{"deployment.yaml", "service.yaml"} {
+		if body := findOutput(t, svc, name); strings.Contains(body, "ort: 0") {
+			t.Errorf("%s still references port 0:\n%s", name, body)
+		}
+	}
+}
+
+// A cronjob has no Service and no port, so it must not be annotated for
+// scraping - that pointed Alloy at port 0.
+func TestCronJobIsNotAnnotatedForScraping(t *testing.T) {
+	c := base()
+	c.Port = 0
+	c.Kind = config.KindCronJob
+	c.Schedule = "0 3 * * *"
+	body := findOutput(t, mustConfig(t, c), "cronjob.yaml")
+
+	if strings.Contains(body, "k8s.grafana.com/scrape") {
+		t.Errorf("cronjob annotated for scraping:\n%s", body)
+	}
+	if strings.Contains(body, "ort: 0") {
+		t.Errorf("cronjob references port 0:\n%s", body)
+	}
+}
+
+// All must refuse a bad patch rather than return manifests with the patch
+// silently dropped. There used to be a second entry point that returned
+// exactly that, and init used it.
+func TestAllRefusesRatherThanEmittingUnpatchedManifests(t *testing.T) {
+	c := base()
+	c.Patches = map[string]string{"Deployment": "spec:\n  replicas: [unclosed"}
+
+	outs, err := All(mustConfig(t, c), "img")
+	if err == nil {
+		t.Fatal("All() accepted a malformed patch")
+	}
+	if outs != nil {
+		t.Errorf("All() returned %d manifests alongside an error; a caller "+
+			"ranging over them would write unpatched output", len(outs))
+	}
 }

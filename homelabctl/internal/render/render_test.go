@@ -7,6 +7,17 @@ import (
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
 )
 
+// mustAll renders and fails the test on error, so cases that are not
+// about error handling read as one line.
+func mustAll(t *testing.T, c *config.Config, imageRef string) []Output {
+	t.Helper()
+	outs, err := All(c, imageRef)
+	if err != nil {
+		t.Fatalf("All() = %v", err)
+	}
+	return outs
+}
+
 func mustConfig(t *testing.T, c *config.Config) *config.Config {
 	t.Helper()
 	if err := c.Validate(); err != nil {
@@ -26,7 +37,7 @@ func base() *config.Config {
 // argocd-image-updater skips the app and it stays on a stale image
 // forever, with only a log line to say so.
 func TestAlwaysRendersKustomizationWithImages(t *testing.T) {
-	out := All(mustConfig(t, base()), "ghcr.io/o/svc:latest")
+	out := mustAll(t, mustConfig(t, base()), "ghcr.io/o/svc:latest")
 
 	var k string
 	for _, o := range out {
@@ -50,7 +61,7 @@ func TestKustomizationListsEveryResource(t *testing.T) {
 	c := base()
 	c.Ingress = &config.Ingress{Host: "svc.example.com"}
 	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: []string{"TOKEN"}}
-	out := All(mustConfig(t, c), "ghcr.io/o/svc:latest")
+	out := mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest")
 
 	var k string
 	for _, o := range out {
@@ -95,7 +106,7 @@ func TestOverrideSubstitutesOnlyImagePlaceholder(t *testing.T) {
 	c.Overrides = map[string]string{
 		"deployment.yaml": "image: " + ImagePlaceholder + "\nbody: {{ .username | b64enc }}\n",
 	}
-	for _, o := range All(mustConfig(t, c), "ghcr.io/o/svc@sha256:abc") {
+	for _, o := range mustAll(t, mustConfig(t, c), "ghcr.io/o/svc@sha256:abc") {
 		if o.Path != "deployment.yaml" {
 			continue
 		}
@@ -109,7 +120,7 @@ func TestOverrideSubstitutesOnlyImagePlaceholder(t *testing.T) {
 }
 
 func TestHardenedByDefault(t *testing.T) {
-	for _, o := range All(mustConfig(t, base()), "img") {
+	for _, o := range mustAll(t, mustConfig(t, base()), "img") {
 		if o.Path != "deployment.yaml" {
 			continue
 		}
@@ -132,7 +143,7 @@ func TestIngressClassFollowsPublic(t *testing.T) {
 		c := base()
 		c.Ingress = &config.Ingress{Host: "h.example.com", Public: tc.public}
 		found := false
-		for _, o := range All(mustConfig(t, c), "img") {
+		for _, o := range mustAll(t, mustConfig(t, c), "img") {
 			if o.Path == "ingress.yaml" && strings.Contains(o.Body, tc.want) {
 				found = true
 			}
@@ -151,7 +162,7 @@ func TestCronJobRendersJobShapeNotDeployment(t *testing.T) {
 	c.Kind = config.KindCronJob
 	c.Schedule = "*/5 * * * *"
 	c.TimeZone = "America/New_York"
-	out := All(mustConfig(t, c), "ghcr.io/o/svc:latest")
+	out := mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest")
 
 	var paths []string
 	var cron string
@@ -196,7 +207,7 @@ func TestCronJobStillHardenedAndGetsSecrets(t *testing.T) {
 	c.Kind = config.KindCronJob
 	c.Schedule = "0 3 * * *"
 	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: []string{"TOKEN"}}
-	for _, o := range All(mustConfig(t, c), "img") {
+	for _, o := range mustAll(t, mustConfig(t, c), "img") {
 		if o.Path != "cronjob.yaml" {
 			continue
 		}

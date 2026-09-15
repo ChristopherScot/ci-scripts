@@ -66,7 +66,7 @@ func runDiff(cfgPath, against, imageRef, repoURL string) error {
 	if imageRef == "" {
 		imageRef = c.Image.Repository + ":latest"
 	}
-	outs, err := render.AllErr(c, imageRef)
+	outs, err := render.All(c, imageRef)
 	if err != nil {
 		return err
 	}

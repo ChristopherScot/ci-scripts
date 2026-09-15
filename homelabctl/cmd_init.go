@@ -55,7 +55,7 @@ func initCmd() *cobra.Command {
 	f.StringVar(&o.team, "team", "me-myself-and-i", "owning team")
 	f.StringVar(&o.host, "host", "", "ingress hostname (omit for no ingress)")
 	f.BoolVar(&o.public, "public", false, "route via the internet-facing ingress controller")
-	f.IntVar(&o.port, "port", 3000, "port the service listens on")
+	f.IntVar(&o.port, "port", config.DefaultPort, "port the service listens on")
 	f.StringVar(&o.owner, "owner", "christopherscot", "GitHub owner")
 	f.StringVar(&o.parentRepo, "parent-repo", "", "add this service to an existing repo (monorepo) instead of creating one")
 	f.BoolVar(&o.private, "private", false, "create the GitHub repo private (image-updater then needs a registry credential)")
@@ -329,7 +329,11 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// Manifests are generated rather than copied, so they reflect
 		// current conventions instead of whatever the template looked like
 		// the day the service was created. `render` regenerates them later.
-		for _, out := range render.All(c, c.Image.Repository+":latest") {
+		manifests, err := render.All(c, c.Image.Repository+":latest")
+		if err != nil {
+			return err
+		}
+		for _, out := range manifests {
 			if err := put(filepath.Join("deploy", out.Path), out.Body, 0); err != nil {
 				return err
 			}

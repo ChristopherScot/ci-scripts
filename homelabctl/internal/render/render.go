@@ -50,54 +50,27 @@ func UnknownOverrides(c *config.Config, outs []Output) []string {
 // reference to deploy; pass a full 40-char SHA or a digest, never an
 // abbreviated SHA - short tags do not exist in the registry and produce
 // ImagePullBackOff.
-// AllErr renders and reports a patch that could not be applied, rather
-// than silently emitting an unpatched manifest.
-func AllErr(c *config.Config, imageRef string) ([]Output, error) {
-	outs := All(c, imageRef)
-	for _, o := range outs {
-		if _, err := applyPatches(o.Body, c.Patches, imageRef); err != nil {
-			return nil, err
-		}
-	}
-	if unknown := UnknownPatchKinds(c, outs); len(unknown) > 0 {
-		return nil, fmt.Errorf("patches name kind(s) this service does not generate: %s (it has: %s)",
-			strings.Join(unknown, ", "), strings.Join(PatchedKinds(outs), ", "))
-	}
-	return outs, nil
-}
-
-// UnknownPatchKinds reports patch keys naming a resource kind this service
-// never generates - a typo that would otherwise apply to nothing, silently.
-func UnknownPatchKinds(c *config.Config, outs []Output) []string {
-	if len(c.Patches) == 0 {
-		return nil
-	}
-	have := map[string]bool{}
-	for _, k := range PatchedKinds(outs) {
-		have[k] = true
-	}
-	var unknown []string
-	for k := range c.Patches {
-		if !have[k] {
-			unknown = append(unknown, k)
-		}
-	}
-	sort.Strings(unknown)
-	return unknown
-}
-
-func All(c *config.Config, imageRef string) []Output {
+//
+// It reports a patch that could not be applied rather than silently
+// emitting an unpatched manifest. This used to be split in two - a
+// convenience All() that dropped the error to keep a simple signature,
+// and an AllErr() that recovered it by applying every patch a SECOND
+// time. Any caller reaching for the shorter name got manifests with their
+// patches quietly missing, which is the exact failure this package exists
+// to prevent: Argo reports Synced and Healthy, and the config lied.
+func All(c *config.Config, imageRef string) ([]Output, error) {
 	var out []Output
-	var patchErr error
+	var err error
 	add := func(path, body string) {
+		if err != nil {
+			return
+		}
 		// Whole-file override wins if present, but it is the loud escape
 		// hatch; patches are the ordinary way to adjust a manifest.
 		if ov, ok := c.Overrides[path]; ok {
 			body = strings.ReplaceAll(ov, ImagePlaceholder, imageRef)
-		} else if patched, err := applyPatches(body, c.Patches, imageRef); err != nil {
-			patchErr = err
-		} else {
-			body = patched
+		} else if body, err = applyPatches(body, c.Patches, imageRef); err != nil {
+			return
 		}
 		out = append(out, Output{Path: path, Body: body})
 	}
@@ -122,8 +95,35 @@ func All(c *config.Config, imageRef string) []Output {
 	}
 	// Last: it lists the files above.
 	add("kustomization.yaml", kustomization(c, out))
-	_ = patchErr // surfaced by AllErr; All keeps the simple signature
-	return out
+	if err != nil {
+		return nil, err
+	}
+
+	if unknown := UnknownPatchKinds(c, out); len(unknown) > 0 {
+		return nil, fmt.Errorf("patches name kind(s) this service does not generate: %s (it has: %s)",
+			strings.Join(unknown, ", "), strings.Join(PatchedKinds(out), ", "))
+	}
+	return out, nil
+}
+
+// UnknownPatchKinds reports patch keys naming a resource kind this service
+// never generates - a typo that would otherwise apply to nothing, silently.
+func UnknownPatchKinds(c *config.Config, outs []Output) []string {
+	if len(c.Patches) == 0 {
+		return nil
+	}
+	have := map[string]bool{}
+	for _, k := range PatchedKinds(outs) {
+		have[k] = true
+	}
+	var unknown []string
+	for k := range c.Patches {
+		if !have[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
 }
 
 func resourceNames(out []Output) []string {
@@ -268,7 +268,9 @@ func serviceAccountName(c *config.Config) string {
 // Alloy discovers scrape targets by annotation - nothing is collected
 // without these, and the absence is silent.
 func metricsAnnotations(c *config.Config) string {
-	if !c.Metrics() {
+	// No port means nothing to scrape. A cronjob has no Service and no
+	// port, and annotating one anyway pointed Alloy at port 0 forever.
+	if !c.Metrics() || c.Port == 0 {
 		return ""
 	}
 	return fmt.Sprintf(`      annotations:
