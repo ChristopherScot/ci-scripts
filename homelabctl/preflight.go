@@ -92,12 +92,9 @@ func checkEnvDrift(c *config.Config, live *liveState) []Finding {
 // renaming here without rebinding there leaves the store unable to
 // authenticate, with the secret silently stale.
 func checkServiceAccount(c *config.Config, live *liveState) []Finding {
-	// render emits serviceAccountName only when secrets are declared, so
-	// that is what the regenerated pod would run as.
-	want := ""
-	if c.Secrets != nil {
-		want = c.Name
-	}
+	// One source for the rule: config owns what identity a service runs
+	// as, so this cannot drift from what render emits.
+	want := c.ServiceAccountName()
 	got := live.ServiceAccount
 	if got == "default" {
 		got = "" // a pod with no SA set reports "default"

@@ -26,6 +26,20 @@ type Config struct {
 	// to this struct.
 	Runtime string `yaml:"runtime"`
 
+	// Kind is the Kubernetes shape this service takes. Language and shape
+	// are independent axes: a Go service and a Go cron job share every
+	// build concern and no manifest concern, so `runtime` chooses how it
+	// is built and `kind` chooses what it becomes.
+	Kind string `yaml:"kind,omitempty"`
+
+	// Schedule is required for kind: cronjob, in cron syntax.
+	Schedule string `yaml:"schedule,omitempty"`
+
+	// TimeZone the schedule is interpreted in. Without it Kubernetes uses
+	// UTC, so `0 3 * * *` fires at 11pm the previous evening in ET - a
+	// schedule that reads correctly and runs at the wrong time.
+	TimeZone string `yaml:"timeZone,omitempty"`
+
 	Namespace string `yaml:"namespace,omitempty"`
 	Replicas  int    `yaml:"replicas,omitempty"`
 
@@ -98,6 +112,7 @@ type Resources struct {
 // what a reader checks when a key is rejected.
 var knownTopLevelKeys = map[string]bool{
 	"name": true, "team": true, "runtime": true, "namespace": true,
+	"kind": true, "schedule": true, "timeZone": true,
 	"replicas": true, "port": true, "image": true, "env": true,
 	"secrets": true, "ingress": true, "probes": true, "resources": true,
 	"overrides": true, "hardened": true, "metrics": true,
@@ -158,6 +173,20 @@ func (c *Config) Hardened() bool { return !c.HardeningDisabled }
 // scraping.
 func (c *Config) Metrics() bool { return !c.MetricsDisabled }
 
+// Workload kinds. A service is long-running and gets a Service, probes and
+// a rollout strategy; a cronjob runs to completion on a schedule and gets
+// none of those.
+const (
+	KindService = "service"
+	KindCronJob = "cronjob"
+)
+
+var validKinds = map[string]bool{KindService: true, KindCronJob: true}
+
+// IsCronJob reports whether this service runs on a schedule rather than
+// continuously.
+func (c *Config) IsCronJob() bool { return c.Kind == KindCronJob }
+
 var nameRE = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$`)
 
 // Load reads and validates a config, applying defaults so that callers see
@@ -178,6 +207,9 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
+	if c.Kind == "" {
+		c.Kind = KindService
+	}
 	if c.Namespace == "" {
 		c.Namespace = c.Name
 	}
@@ -220,6 +252,19 @@ func (c *Config) Validate() error {
 	}
 	if c.Team == "" {
 		add("team is required")
+	}
+	if c.Kind != "" && !validKinds[c.Kind] {
+		add("kind %q is not one of: service, cronjob", c.Kind)
+	}
+	if c.IsCronJob() {
+		if c.Schedule == "" {
+			add("schedule is required for kind: cronjob")
+		}
+		if c.Ingress != nil {
+			add("kind: cronjob cannot have an ingress; a job that exits serves no traffic")
+		}
+	} else if c.Schedule != "" {
+		add("schedule is only meaningful for kind: cronjob")
 	}
 	if c.Runtime == "" {
 		add("runtime is required; see `homelabctl init --help` for the registered runtimes")

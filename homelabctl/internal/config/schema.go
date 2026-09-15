@@ -32,6 +32,22 @@ const Schema = `{
       "description": "Which language/shape plugin builds this. See homelabctl init --help.",
       "examples": ["go-service", "node-service", "go-cli"]
     },
+    "kind": {
+      "type": "string",
+      "enum": ["service", "cronjob"],
+      "default": "service",
+      "description": "What Kubernetes shape this becomes. A service is long-running; a cronjob runs on a schedule and gets no Service, probes or ingress."
+    },
+    "schedule": {
+      "type": "string",
+      "description": "Cron expression. Required for kind: cronjob."
+    },
+    "timeZone": {
+      "type": "string",
+      "default": "UTC",
+      "description": "Zone the schedule is read in. Without it Kubernetes uses UTC, so a schedule reading 3am fires at 11pm ET the evening before.",
+      "examples": ["America/New_York"]
+    },
     "namespace": { "type": "string", "description": "Defaults to the service name." },
     "replicas": { "type": "integer", "minimum": 1, "default": 1 },
     "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 3000 },

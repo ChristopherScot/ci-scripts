@@ -46,3 +46,28 @@ func TestInvalidNameRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestCronJobValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mut  func(*Config)
+		want string
+	}{
+		{"schedule required", func(c *Config) { c.Kind = KindCronJob }, "schedule is required"},
+		{"no ingress", func(c *Config) {
+			c.Kind, c.Schedule = KindCronJob, "* * * * *"
+			c.Ingress = &Ingress{Host: "h.example.com"}
+		}, "cannot have an ingress"},
+		{"schedule needs cronjob", func(c *Config) { c.Schedule = "* * * * *" }, "only meaningful for kind: cronjob"},
+		{"unknown kind", func(c *Config) { c.Kind = "daemonset" }, "not one of"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000}
+			tc.mut(c)
+			err := c.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Validate() = %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}

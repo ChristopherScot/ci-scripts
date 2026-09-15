@@ -59,8 +59,17 @@ func All(c *config.Config, imageRef string) []Output {
 	}
 
 	add("namespace.yaml", namespace(c))
-	add("deployment.yaml", deployment(c, imageRef))
-	add("service.yaml", service(c))
+
+	// Language and shape are independent: the runtime decided how this is
+	// built, the kind decides what it becomes. A cron job has no Service,
+	// no probes and no rollout strategy - a pod that exits on purpose has
+	// nothing to keep ready.
+	if c.IsCronJob() {
+		add("cronjob.yaml", cronJob(c, imageRef))
+	} else {
+		add("deployment.yaml", deployment(c, imageRef))
+		add("service.yaml", service(c))
+	}
 	if c.Secrets != nil {
 		add("externalsecret.yaml", externalSecret(c))
 	}
@@ -169,7 +178,7 @@ spec:
 		fmt.Fprintf(&b, "            - name: %s\n              value: %q\n", k, c.Env[k])
 	}
 	if c.Secrets != nil {
-		fmt.Fprintf(&b, "          envFrom:\n            - secretRef:\n                name: %s-secrets\n", c.Name)
+		fmt.Fprintf(&b, "          envFrom:\n            - secretRef:\n                name: %s\n", c.SecretName())
 	}
 
 	fmt.Fprintf(&b, `          resources:
@@ -228,10 +237,11 @@ spec:
 // actually has - which only bites once something gives the pod direct
 // Vault or API access.
 func serviceAccountName(c *config.Config) string {
-	if c.Secrets == nil {
+	sa := c.ServiceAccountName()
+	if sa == "" {
 		return ""
 	}
-	return fmt.Sprintf("      serviceAccountName: %s\n", c.Name)
+	return fmt.Sprintf("      serviceAccountName: %s\n", sa)
 }
 
 // metricsAnnotations wires the pod into the cluster's metrics collection.
@@ -246,6 +256,120 @@ func metricsAnnotations(c *config.Config) string {
         k8s.grafana.com/metrics.path: "/metrics"
         k8s.grafana.com/metrics.portNumber: "%d"
 `, c.Port)
+}
+
+// cronJob renders a scheduled workload. It shares the container spec with
+// deployment - image, env, resources, hardening - and differs in
+// everything about lifecycle.
+// containerBody renders the container fields that are identical across
+// workload shapes - env, secrets, resources, hardening. Probes belong to
+// the deployment only: a job that runs to completion has no readiness to
+// report. pad is the indent the caller nests it at.
+func containerBody(c *config.Config, pad string) string {
+	var b strings.Builder
+	b.WriteString(pad + "env:\n")
+	fmt.Fprintf(&b, "%s  - name: PORT\n%s    value: \"%d\"\n", pad, pad, c.Port)
+	for _, k := range sortedKeys(c.Env) {
+		fmt.Fprintf(&b, "%s  - name: %s\n%s    value: %q\n", pad, k, pad, c.Env[k])
+	}
+	if c.Secrets != nil {
+		fmt.Fprintf(&b, "%senvFrom:\n%s  - secretRef:\n%s      name: %s\n",
+			pad, pad, pad, c.SecretName())
+	}
+	fmt.Fprintf(&b, `%sresources:
+%s  requests:
+%s    cpu: %s
+%s    memory: %s
+%s  limits:
+%s    memory: %s
+`, pad, pad, pad, c.Resources.CPURequest, pad, c.Resources.MemoryRequest,
+		pad, pad, c.Resources.MemoryLimit)
+
+	if c.Hardened() {
+		fmt.Fprintf(&b, `%svolumeMounts:
+%s  - name: tmp
+%s    mountPath: /tmp
+%ssecurityContext:
+%s  allowPrivilegeEscalation: false
+%s  runAsNonRoot: true
+%s  runAsUser: 65532
+%s  readOnlyRootFilesystem: true
+%s  capabilities:
+%s    drop: [ALL]
+`, pad, pad, pad, pad, pad, pad, pad, pad, pad, pad)
+	}
+	return b.String()
+}
+
+func cronJob(c *config.Config, imageRef string) string {
+	var b strings.Builder
+	tz := c.TimeZone
+	if tz == "" {
+		tz = "UTC"
+	}
+	fmt.Fprintf(&b, `apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    app: %s
+    team: %s
+spec:
+  schedule: "%s"
+  # Without an explicit zone Kubernetes schedules in UTC, so a schedule
+  # that reads as 3am fires at 11pm the previous evening in ET.
+  timeZone: "%s"
+  # Forbid: a run that overruns its interval must not have a second copy
+  # started alongside it.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # A hung job must die rather than block every later run.
+      activeDeadlineSeconds: 600
+      backoffLimit: 2
+      template:
+        metadata:
+%s        spec:
+          restartPolicy: Never
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+%s          containers:
+            - name: %s
+              image: %s
+`, c.Name, c.Namespace, c.Name, c.Team, c.Schedule, tz,
+		indentBlock(metricsAnnotations(c), "  "), indentBlock(serviceAccountName(c), "    "),
+		c.Name, imageRef)
+
+	b.WriteString(containerBody(c, "              "))
+	if c.Hardened() {
+		b.WriteString(`          volumes:
+            - name: tmp
+              emptyDir: {}
+`)
+	}
+	return b.String()
+}
+
+// indentBlock shifts an already-rendered YAML fragment deeper, so the
+// container and pod pieces can be shared between workload shapes that nest
+// them at different depths.
+func indentBlock(s, pad string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			b.WriteString("\n")
+			continue
+		}
+		b.WriteString(pad + line + "\n")
+	}
+	return b.String()
 }
 
 func service(c *config.Config) string {
@@ -268,6 +392,7 @@ spec:
 // namespace, so compromising one pod does not expose another app's secrets.
 func externalSecret(c *config.Config) string {
 	var b strings.Builder
+	sa, store, secret := c.ServiceAccountName(), c.SecretStoreName(), c.SecretName()
 	fmt.Fprintf(&b, `apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -277,7 +402,7 @@ metadata:
 apiVersion: external-secrets.io/v1beta1
 kind: SecretStore
 metadata:
-  name: vault-%s
+  name: %s
   namespace: %s
 spec:
   provider:
@@ -295,17 +420,17 @@ spec:
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: %s-secrets
+  name: %s
   namespace: %s
 spec:
   refreshInterval: 1h
   secretStoreRef:
-    name: vault-%s
+    name: %s
     kind: SecretStore
   target:
-    name: %s-secrets
+    name: %s
   data:
-`, c.Name, c.Namespace, c.Name, c.Namespace, c.Name, c.Name, c.Name, c.Namespace, c.Name, c.Name)
+`, sa, c.Namespace, store, c.Namespace, c.VaultRoleName(), sa, secret, c.Namespace, store, secret)
 	for _, k := range c.Secrets.Keys {
 		fmt.Fprintf(&b, "    - secretKey: %s\n      remoteRef: { key: %s, property: %s }\n",
 			k, c.Secrets.VaultPath, strings.ToLower(k))

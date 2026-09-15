@@ -80,10 +80,10 @@ path "kv/metadata/%s/*" {
 // actually written.
 func roleArgs(c *config.Config) []string {
 	return []string{
-		"write", "auth/kubernetes/role/" + c.Name,
-		"bound_service_account_names=" + c.Name,
+		"write", "auth/kubernetes/role/" + c.VaultRoleName(),
+		"bound_service_account_names=" + c.ServiceAccountName(),
 		"bound_service_account_namespaces=" + c.Namespace,
-		"policies=" + c.Name,
+		"policies=" + c.VaultPolicyName(),
 		"ttl=1h",
 	}
 }
@@ -100,7 +100,7 @@ vault policy write %s - <<'POLICY'
 
 vault %s \
   %s
-`, c.Name, c.Name, vaultPolicy(c), args[0]+" "+args[1], strings.Join(args[2:], " \\\n  "))
+`, c.Name, c.VaultPolicyName(), vaultPolicy(c), args[0]+" "+args[1], strings.Join(args[2:], " \\\n  "))
 }
 
 // applyVault runs the policy and role writes through the vault-0 pod. Both
@@ -112,15 +112,16 @@ func applyVault(c *config.Config) error {
 		return err
 	}
 
-	if err := vaultExec(token, vaultPolicy(c), "policy", "write", c.Name, "-"); err != nil {
-		return fmt.Errorf("write policy %s: %w", c.Name, err)
+	if err := vaultExec(token, vaultPolicy(c), "policy", "write", c.VaultPolicyName(), "-"); err != nil {
+		return fmt.Errorf("write policy %s: %w", c.VaultPolicyName(), err)
 	}
-	fmt.Printf("wrote policy %s\n", c.Name)
+	fmt.Printf("wrote policy %s\n", c.VaultPolicyName())
 
 	if err := vaultExec(token, "", roleArgs(c)...); err != nil {
 		return fmt.Errorf("write role %s: %w", c.Name, err)
 	}
-	fmt.Printf("wrote role auth/kubernetes/role/%s (sa=%s ns=%s)\n", c.Name, c.Name, c.Namespace)
+	fmt.Printf("wrote role auth/kubernetes/role/%s (sa=%s ns=%s)\n",
+		c.VaultRoleName(), c.ServiceAccountName(), c.Namespace)
 	return nil
 }
 

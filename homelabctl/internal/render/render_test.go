@@ -142,3 +142,68 @@ func TestIngressClassFollowsPublic(t *testing.T) {
 		}
 	}
 }
+
+// A cron job is a different Kubernetes shape, not a different language: it
+// gets no Service, no probes and no rollout strategy, because a pod that
+// exits on purpose has nothing to keep ready.
+func TestCronJobRendersJobShapeNotDeployment(t *testing.T) {
+	c := base()
+	c.Kind = config.KindCronJob
+	c.Schedule = "*/5 * * * *"
+	c.TimeZone = "America/New_York"
+	out := All(mustConfig(t, c), "ghcr.io/o/svc:latest")
+
+	var paths []string
+	var cron string
+	for _, o := range out {
+		paths = append(paths, o.Path)
+		if o.Path == "cronjob.yaml" {
+			cron = o.Body
+		}
+	}
+	if cron == "" {
+		t.Fatalf("no cronjob.yaml rendered; got %v", paths)
+	}
+	for _, unwanted := range []string{"deployment.yaml", "service.yaml"} {
+		for _, p := range paths {
+			if p == unwanted {
+				t.Errorf("cron job rendered %s, which it has no use for", unwanted)
+			}
+		}
+	}
+	for _, want := range []string{
+		`schedule: "*/5 * * * *"`,
+		// Without an explicit zone Kubernetes uses UTC, so a schedule
+		// reading 3am fires at 11pm the evening before in ET.
+		`timeZone: "America/New_York"`,
+		"concurrencyPolicy: Forbid",
+		"restartPolicy: Never",
+		"activeDeadlineSeconds",
+	} {
+		if !strings.Contains(cron, want) {
+			t.Errorf("cronjob.yaml missing %q", want)
+		}
+	}
+	if strings.Contains(cron, "readinessProbe") {
+		t.Error("cron job has a readiness probe; a job that exits is never ready")
+	}
+}
+
+// Hardening and secrets are workload-independent - they must reach the
+// container whichever shape wraps it.
+func TestCronJobStillHardenedAndGetsSecrets(t *testing.T) {
+	c := base()
+	c.Kind = config.KindCronJob
+	c.Schedule = "0 3 * * *"
+	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: []string{"TOKEN"}}
+	for _, o := range All(mustConfig(t, c), "img") {
+		if o.Path != "cronjob.yaml" {
+			continue
+		}
+		for _, want := range []string{"runAsNonRoot: true", "seccompProfile", "secretRef", "svc-secrets"} {
+			if !strings.Contains(o.Body, want) {
+				t.Errorf("cronjob.yaml missing %q", want)
+			}
+		}
+	}
+}
