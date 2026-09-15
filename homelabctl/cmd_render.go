@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -86,11 +87,19 @@ func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string, dryRun, 
 		return nil
 	}
 
+	// An override naming a file that is never generated is a typo, and
+	// silently dropping it leaves the author believing it applied.
+	outs := render.All(c, imageRef)
+	if unknown := render.UnknownOverrides(c, outs); len(unknown) > 0 {
+		return fmt.Errorf("overrides name file(s) this service does not generate: %s",
+			strings.Join(unknown, ", "))
+	}
+
 	dir := filepath.Join(out, c.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for _, o := range render.All(c, imageRef) {
+	for _, o := range outs {
 		p := filepath.Join(dir, o.Path)
 		if err := os.WriteFile(p, []byte(o.Body), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", p, err)

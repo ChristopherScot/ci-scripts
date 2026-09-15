@@ -24,6 +24,27 @@ type Output struct {
 	Body string
 }
 
+// UnknownOverrides returns override keys that name no generated file.
+// Silently ignoring them means an author believes their override applied
+// when it did not.
+func UnknownOverrides(c *config.Config, outs []Output) []string {
+	if len(c.Overrides) == 0 {
+		return nil
+	}
+	known := make(map[string]bool, len(outs))
+	for _, o := range outs {
+		known[o.Path] = true
+	}
+	var unknown []string
+	for k := range c.Overrides {
+		if !known[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
 // All renders every manifest for a service. imageRef is the full image
 // reference to deploy; pass a full 40-char SHA or a digest, never an
 // abbreviated SHA - short tags do not exist in the registry and produce

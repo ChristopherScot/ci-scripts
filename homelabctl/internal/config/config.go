@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -92,7 +93,32 @@ type Resources struct {
 // UnmarshalYAML defaults Hardened to true. Without this, a config that
 // simply omits the field would decode to false and silently generate an
 // unhardened deployment - the opposite of the intended default.
+// knownTopLevelKeys is every field settable from YAML, including the two
+// the decoder handles specially. Kept beside UnmarshalYAML because that is
+// what a reader checks when a key is rejected.
+var knownTopLevelKeys = map[string]bool{
+	"name": true, "team": true, "runtime": true, "namespace": true,
+	"replicas": true, "port": true, "image": true, "env": true,
+	"secrets": true, "ingress": true, "probes": true, "resources": true,
+	"overrides": true, "hardened": true, "metrics": true,
+}
+
 func (c *Config) UnmarshalYAML(value *yaml.Node) error {
+	// yaml.Decoder.KnownFields does not reach inside a custom
+	// UnmarshalYAML, so an unknown key would decode silently - and
+	// `hardend: false` doing nothing is the exact case the schema exists
+	// to catch. Check the keys directly.
+	var unknown []string
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		if k := value.Content[i].Value; !knownTopLevelKeys[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("unknown field(s): %s", strings.Join(unknown, ", "))
+	}
+
 	type plain Config // avoid recursing into this method
 	var tmp plain
 	if err := value.Decode(&tmp); err != nil {
@@ -141,6 +167,9 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	// KnownFields so a typo is an error rather than silence: `hardend:
+	// false` would otherwise decode cleanly, change nothing, and ship an
+	// unhardened deploy - the exact case the schema was written for.
 	var c Config
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)

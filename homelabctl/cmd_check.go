@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -64,6 +65,17 @@ func runCheck(dir string) error {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			return err
+		}
+		// Parse it: regexes over lines cannot tell valid YAML from
+		// garbage, and shipping garbage is the failure this guards.
+		var doc any
+		for i, chunk := range strings.Split(string(b), "\n---\n") {
+			if strings.TrimSpace(chunk) == "" {
+				continue
+			}
+			if err := yaml.Unmarshal([]byte(chunk), &doc); err != nil {
+				add("%s: document %d is not valid YAML: %v", p, i+1, err)
+			}
 		}
 		for i, line := range strings.Split(string(b), "\n") {
 			if changeme.MatchString(line) {
