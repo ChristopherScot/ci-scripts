@@ -30,7 +30,7 @@ func TestPublicIngressRejectsAuthelia(t *testing.T) {
 
 func TestDefaultsAppliedByValidate(t *testing.T) {
 	c := &Config{Name: "a", Team: "t", Runtime: "go-service"}
-	if err := c.Validate(); err != nil {
+	if err := c.Complete(); err != nil {
 		t.Fatalf("Validate() = %v", err)
 	}
 	if c.Namespace != "a" || c.Replicas != 1 || !c.Hardened() {
@@ -69,5 +69,33 @@ func TestCronJobValidation(t *testing.T) {
 				t.Errorf("Validate() = %v, want an error containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// Validate must not touch the Config. It used to apply defaults first,
+// which meant a failed validation still mutated the receiver: a caller
+// that validated, saw an error, fixed one field and validated again was
+// working on a half-defaulted struct.
+func TestValidateDoesNotMutate(t *testing.T) {
+	c := Config{Name: "svc"} // missing runtime and image: will fail
+	if err := c.Validate(); err == nil {
+		t.Fatal("Validate() accepted a config with no runtime or image")
+	}
+	if c.Kind != "" || c.Replicas != 0 || c.Port != 0 || c.Probes != nil || c.Resources != nil {
+		t.Errorf("Validate() mutated the Config: kind=%q replicas=%d port=%d probes=%v resources=%v",
+			c.Kind, c.Replicas, c.Port, c.Probes, c.Resources)
+	}
+}
+
+// Complete is the one that fills things in.
+func TestCompleteAppliesDefaults(t *testing.T) {
+	c := Config{Name: "svc", Team: "t", Runtime: "go-service",
+		Image: Image{Repository: "ghcr.io/o/svc"}}
+	if err := c.Complete(); err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+	if c.Kind != KindService || c.Replicas != 1 || c.Port != DefaultPort ||
+		c.Probes == nil || c.Resources == nil {
+		t.Errorf("Complete() left the Config incomplete: %+v", c)
 	}
 }

@@ -12,7 +12,7 @@ import (
 func TestEnvDriftIsBlocking(t *testing.T) {
 	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
 		Env: map[string]string{"KEEP": "1"}}
-	if err := c.Validate(); err != nil {
+	if err := c.Complete(); err != nil {
 		t.Fatal(err)
 	}
 	live := &liveState{Env: []string{"PORT", "KEEP", "BASE_URL", "NTFY_URL"}}
@@ -34,7 +34,7 @@ func TestEnvDriftIsBlocking(t *testing.T) {
 // PORT is set by the renderer, not the config, so it must not be reported.
 func TestPortIsNotReportedAsDrift(t *testing.T) {
 	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000}
-	_ = c.Validate()
+	_ = c.Complete()
 	if f := checkEnvDrift(c, &liveState{Env: []string{"PORT"}}); len(f) != 0 {
 		t.Errorf("PORT reported as drift: %+v", f)
 	}
@@ -45,7 +45,7 @@ func TestPortIsNotReportedAsDrift(t *testing.T) {
 func TestServiceAccountRenameIsBlocking(t *testing.T) {
 	c := &config.Config{Name: "newname", Team: "t", Runtime: "go-service", Port: 3000,
 		Secrets: &config.Secrets{VaultPath: "p", Keys: []string{"K"}}}
-	_ = c.Validate()
+	_ = c.Complete()
 
 	f := checkServiceAccount(c, &liveState{ServiceAccount: "oldname"})
 	if len(f) != 1 || !f[0].Blocking {
@@ -61,7 +61,7 @@ func TestServiceAccountRenameIsBlocking(t *testing.T) {
 func TestNoFindingWhenServiceAccountMatches(t *testing.T) {
 	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
 		Secrets: &config.Secrets{VaultPath: "p", Keys: []string{"K"}}}
-	_ = c.Validate()
+	_ = c.Complete()
 	if f := checkServiceAccount(c, &liveState{ServiceAccount: "svc"}); len(f) != 0 {
 		t.Errorf("matching SA reported as drift: %+v", f)
 	}
@@ -72,7 +72,7 @@ func TestNoFindingWhenServiceAccountMatches(t *testing.T) {
 // invisible in a diff unless you notice a line disappeared.
 func TestDroppingSecretsRevertsToDefaultAccount(t *testing.T) {
 	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000}
-	if err := c.Validate(); err != nil {
+	if err := c.Complete(); err != nil {
 		t.Fatal(err)
 	}
 	f := checkServiceAccount(c, &liveState{ServiceAccount: "svc"})
@@ -87,7 +87,7 @@ func TestDroppingSecretsRevertsToDefaultAccount(t *testing.T) {
 // A pod that never had a ServiceAccount reports "default"; that is not drift.
 func TestDefaultAccountIsNotDrift(t *testing.T) {
 	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000}
-	_ = c.Validate()
+	_ = c.Complete()
 	if f := checkServiceAccount(c, &liveState{ServiceAccount: "default"}); len(f) != 0 {
 		t.Errorf("an unset ServiceAccount reported as drift: %+v", f)
 	}

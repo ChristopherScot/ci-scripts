@@ -23,9 +23,25 @@ var shortSHA = regexp.MustCompile(`:[0-9a-f]{7,12}$`)
 // without matching on the message text.
 var errAbbreviatedSHA = errors.New("image ref ends in an abbreviated SHA; registry tags are full 40-char SHAs or digests")
 
+// renderOpts is what `render` was asked to do. A struct rather than eight
+// positional parameters, matching initOpts: four consecutive strings at a
+// call site are indistinguishable from each other, and the compiler
+// cannot catch a transposition.
+type renderOpts struct {
+	cfgPath  string
+	imageRef string
+
+	out     string // directory to write manifests into
+	appOut  string // where to also write the Argo Application, if anywhere
+	repoURL string // repo the Application syncs from
+	appPath string // path within that repo
+
+	dryRun bool
+	force  bool
+}
+
 func renderCmd() *cobra.Command {
-	var out, appOut, repoURL, appPath string
-	var dryRun, force bool
+	var o renderOpts
 	cmd := &cobra.Command{
 		Use:   "render [config.yaml] <image-ref>",
 		Short: "render manifests from a config",
@@ -34,29 +50,28 @@ func renderCmd() *cobra.Command {
 			"is not a registry tag and yields ImagePullBackOff.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			cfg, imageRef := defaultConfigPath, args[0]
+			o.cfgPath, o.imageRef = defaultConfigPath, args[0]
 			if len(args) == 2 {
-				cfg, imageRef = args[0], args[1]
+				o.cfgPath, o.imageRef = args[0], args[1]
 			}
-			return runRender(cfg, imageRef, out, appOut, repoURL, appPath, dryRun, force)
+			return runRender(o)
 		},
 	}
-	cmd.Flags().StringVar(&out, "out", ".", "directory to write manifests into")
-	cmd.Flags().StringVar(&appOut, "app-out", "", "also write the Argo Application here")
-	cmd.Flags().StringVar(&repoURL, "repo-url", "https://github.com/ChristopherScot/homelab", "repo the Application syncs from")
-	cmd.Flags().StringVar(&appPath, "app-path", "", "path within that repo (default: service name)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "check against the running service and write nothing")
-	cmd.Flags().BoolVar(&force, "force", false, "write even if the change would break the running service")
+	cmd.Flags().StringVar(&o.out, "out", ".", "directory to write manifests into")
+	cmd.Flags().StringVar(&o.appOut, "app-out", "", "also write the Argo Application here")
+	cmd.Flags().StringVar(&o.repoURL, "repo-url", "https://github.com/ChristopherScot/homelab", "repo the Application syncs from")
+	cmd.Flags().StringVar(&o.appPath, "app-path", "", "path within that repo (default: service name)")
+	cmd.Flags().BoolVar(&o.dryRun, "dry-run", false, "check against the running service and write nothing")
+	cmd.Flags().BoolVar(&o.force, "force", false, "write even if the change would break the running service")
 	return cmd
 }
 
-func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string, dryRun, force bool) error {
-
-	if shortSHA.MatchString(imageRef) {
-		return fmt.Errorf("%q: %w", imageRef, errAbbreviatedSHA)
+func runRender(o renderOpts) error {
+	if shortSHA.MatchString(o.imageRef) {
+		return fmt.Errorf("%q: %w", o.imageRef, errAbbreviatedSHA)
 	}
 
-	c, err := config.Load(cfgPath)
+	c, err := config.Load(o.cfgPath)
 	if err != nil {
 		return err
 	}
@@ -74,23 +89,23 @@ func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string, dryRun, 
 	case err != nil:
 		fmt.Println("preflight skipped:", err)
 	case len(findings) > 0:
-		if reportPreflight(findings) && !force {
+		if reportPreflight(findings) && !o.force {
 			return fmt.Errorf("\nrefusing to render: the above would break the running service.\n" +
-				"fix config.yaml, or pass --force if this is intended")
+				"fix config.yaml, or pass --o.force if this is intended")
 		}
-	case !dryRun:
+	case !o.dryRun:
 		// nothing to report
 	default:
 		fmt.Println("preflight: no drift from the running service")
 	}
-	if dryRun {
+	if o.dryRun {
 		fmt.Println("dry run: nothing written")
 		return nil
 	}
 
 	// An override naming a file that is never generated is a typo, and
 	// silently dropping it leaves the author believing it applied.
-	outs, err := render.All(c, imageRef)
+	outs, err := render.All(c, o.imageRef)
 	if err != nil {
 		return err
 	}
@@ -99,7 +114,7 @@ func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string, dryRun, 
 			strings.Join(unknown, ", "))
 	}
 
-	dir := filepath.Join(out, c.Name)
+	dir := filepath.Join(o.out, c.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -111,18 +126,18 @@ func runRender(cfgPath, imageRef, out, appOut, repoURL, appPath string, dryRun, 
 		fmt.Println("wrote", p)
 	}
 
-	if appOut != "" {
-		p := appPath
+	if o.appOut != "" {
+		p := o.appPath
 		if p == "" {
 			p = c.Name
 		}
-		if err := os.MkdirAll(filepath.Dir(appOut), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(o.appOut), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(appOut, []byte(render.Application(c, repoURL, p)), 0o644); err != nil {
+		if err := os.WriteFile(o.appOut, []byte(render.Application(c, o.repoURL, p)), 0o644); err != nil {
 			return err
 		}
-		fmt.Println("wrote", appOut)
+		fmt.Println("wrote", o.appOut)
 	}
 	return nil
 }

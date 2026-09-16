@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"text/template"
 )
@@ -80,8 +81,20 @@ func (e embedded) buildSteps(p Params) string {
 }
 
 func (e embedded) renderFiles(p Params) []File {
+	// Sorted, because Go randomizes map iteration order: ranging directly
+	// made two identical `init` runs print their "created:" lists in
+	// different orders, so a re-run looked like a change. It would also
+	// hide any ordering dependence that ever crept into the write loop
+	// behind an intermittent failure.
+	srcs := make([]string, 0, len(e.files))
+	for src := range e.files {
+		srcs = append(srcs, src)
+	}
+	sort.Strings(srcs)
+
 	out := make([]File, 0, len(e.files))
-	for src, dst := range e.files {
+	for _, src := range srcs {
+		dst := e.files[src]
 		body := e.read(src)
 		if strings.HasSuffix(src, ".tmpl") {
 			body = e.render(src, p)

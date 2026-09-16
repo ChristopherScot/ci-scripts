@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -134,5 +135,33 @@ func TestGetUnknownRuntimeListsAvailable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "go-service") {
 		t.Errorf("error should list available runtimes; got %v", err)
+	}
+}
+
+// Go randomizes map iteration order, so ranging over the file map made
+// every scaffold list its files in a different order.
+func TestArtifactsAreDeterministic(t *testing.T) {
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q) = %v", name, err)
+		}
+		p := Params{Name: "svc", Module: "example.com/svc", Port: 3000}
+
+		var first []string
+		for i := 0; i < 25; i++ {
+			var paths []string
+			for _, f := range r.Artifacts(p).Files {
+				paths = append(paths, f.Path)
+			}
+			if i == 0 {
+				first = paths
+				continue
+			}
+			if !slices.Equal(paths, first) {
+				t.Fatalf("%s: file order changed between runs:\n  run 0: %v\n  run %d: %v",
+					name, first, i, paths)
+			}
+		}
 	}
 }

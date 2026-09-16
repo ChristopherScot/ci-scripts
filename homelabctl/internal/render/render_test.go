@@ -20,7 +20,7 @@ func mustAll(t *testing.T, c *config.Config, imageRef string) []Output {
 
 func mustConfig(t *testing.T, c *config.Config) *config.Config {
 	t.Helper()
-	if err := c.Validate(); err != nil {
+	if err := c.Complete(); err != nil {
 		t.Fatalf("Validate() = %v", err)
 	}
 	return c

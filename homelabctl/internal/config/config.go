@@ -216,7 +216,10 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	return &c, c.Validate()
+	if err := c.Complete(); err != nil {
+		return nil, err
+	}
+	return &c, nil
 }
 
 func (c *Config) applyDefaults() {
@@ -255,13 +258,25 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// Validate applies defaults and then reports every problem at once rather
-// than the first, so a misconfigured service is fixed in one pass instead
-// of N deploys. Defaults are applied here rather than only on load so that
-// a Config built in code - by `init`, or by a test - is as complete as one
-// read from disk.
-func (c *Config) Validate() error {
+// Complete fills in defaults and then validates, which is what every
+// caller of a freshly built or freshly parsed Config wants. It is
+// separate from Validate because the two are different jobs: one writes
+// to the Config, the other only reads it. Fusing them meant a method
+// named for a question performed a mutation - and mutated even when it
+// returned an error, so a caller that validated, saw a failure, fixed one
+// field and validated again was working on a half-defaulted struct.
+func (c *Config) Complete() error {
 	c.applyDefaults()
+	return c.Validate()
+}
+
+// Validate reports every problem at once rather than the first, so a
+// misconfigured service is fixed in one pass instead of N deploys.
+//
+// It does not modify the Config. Call Complete on one built in code or
+// parsed from YAML; validating a Config that has not been defaulted will
+// report the missing defaults as errors, which is the honest answer.
+func (c Config) Validate() error {
 	var errs []string
 	add := func(f string, a ...any) { errs = append(errs, fmt.Sprintf(f, a...)) }
 

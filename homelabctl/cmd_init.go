@@ -186,7 +186,7 @@ func buildConfig(o initOpts) (*config.Config, error) {
 	if o.host != "" {
 		c.Ingress = &config.Ingress{Host: o.host, Public: o.public}
 	}
-	return c, c.Validate()
+	return c, c.Complete()
 }
 
 // confirm prints exactly what will be created before touching anything

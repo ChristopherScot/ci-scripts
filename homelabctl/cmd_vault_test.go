@@ -23,7 +23,7 @@ func TestPolicyNeverGrantsAnAncestorPath(t *testing.T) {
 		t.Run(tc.vaultPath, func(t *testing.T) {
 			c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
 				Secrets: &config.Secrets{VaultPath: tc.vaultPath, Keys: []string{"K"}}}
-			if err := c.Validate(); err != nil {
+			if err := c.Complete(); err != nil {
 				t.Fatal(err)
 			}
 			got := vaultPolicy(c)
@@ -45,7 +45,7 @@ func TestRoleBindsOnlyItsOwnServiceAccount(t *testing.T) {
 	c := &config.Config{Name: "svc", Namespace: "svc-ns", Team: "t",
 		Runtime: "go-service", Port: 3000,
 		Secrets: &config.Secrets{VaultPath: "svc/config", Keys: []string{"K"}}}
-	if err := c.Validate(); err != nil {
+	if err := c.Complete(); err != nil {
 		t.Fatal(err)
 	}
 	got := vaultCommands(c)

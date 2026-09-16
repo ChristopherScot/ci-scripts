@@ -70,7 +70,11 @@ func TestIsNewer(t *testing.T) {
 // An abbreviated SHA is not a registry tag and yields ImagePullBackOff, so
 // render must refuse one rather than generate a manifest that cannot pull.
 func TestRenderRejectsAbbreviatedSHA(t *testing.T) {
-	err := runRender("nonexistent.yaml", "ghcr.io/o/x:abc1234", ".", "", "", "", false, false)
+	err := runRender(renderOpts{
+		cfgPath:  "nonexistent.yaml",
+		imageRef: "ghcr.io/o/x:abc1234",
+		out:      ".",
+	})
 	if !errors.Is(err, errAbbreviatedSHA) {
 		t.Errorf("runRender with short SHA = %v, want errAbbreviatedSHA", err)
 	}
