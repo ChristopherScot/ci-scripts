@@ -172,6 +172,8 @@ func TestArtifactsAreDeterministic(t *testing.T) {
 // without go.sum does not build at all. Every runtime that generates a
 // manifest of dependencies must declare how to lock it.
 func TestRuntimesDeclareDependencyResolution(t *testing.T) {
+	// An application must lock its dependencies or it does not build
+	// reproducibly.
 	manifests := map[string]string{
 		"go.mod":       "go",
 		"package.json": "npm",
@@ -189,16 +191,32 @@ func TestRuntimesDeclareDependencyResolution(t *testing.T) {
 			if !needsLock {
 				continue
 			}
+			// go-service's package.json describes the client it
+			// publishes, not an application it builds. A published
+			// library ships no lockfile: the consumer's lockfile pins
+			// what it resolves, and shipping one would pin nothing for
+			// anybody.
+			if f.Path == "package.json" && name == "go-service" {
+				continue
+			}
 			cmds := r.ResolveDeps()
 			if len(cmds) == 0 {
 				t.Errorf("%s generates %s but declares no ResolveDeps; its scaffold will not build",
 					name, f.Path)
 				continue
 			}
+			// A runtime may resolve more than one ecosystem - go-service
+			// locks Go modules and generates its TypeScript client - so
+			// this asks that the right tool is among the commands, not
+			// that every command uses it.
+			var found bool
 			for _, argv := range cmds {
-				if len(argv) == 0 || argv[0] != tool {
-					t.Errorf("%s generates %s but resolves with %v", name, f.Path, argv)
+				if len(argv) > 0 && argv[0] == tool {
+					found = true
 				}
+			}
+			if !found {
+				t.Errorf("%s generates %s but no resolve command runs %q: %v", name, f.Path, tool, cmds)
 			}
 		}
 	}
@@ -542,5 +560,61 @@ func TestGoServiceClientIsImportable(t *testing.T) {
 		if strings.Contains(body, `"example.com/svc"`) {
 			t.Errorf("%s imports the service's main package", path)
 		}
+	}
+}
+
+// A Node service calling a Go service should get the same behaviour a Go
+// caller does. Both clients come from the same spec and carry the same
+// defaults, so a slow dependency fails the same way in either language.
+func TestGoServiceShipsATypeScriptClient(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	a := r.Artifacts(Params{
+		Name: "svc", Team: "t", Module: "example.com/svc", Owner: "acme",
+		Port: 3000, SpecVersion: InitialSpecVersion,
+	})
+
+	files := map[string]string{}
+	for _, f := range a.Files {
+		files[f.Path] = f.Body
+	}
+
+	// npm looks for package.json at the repo root when installing from
+	// git, which is how a consumer gets this without a registry.
+	pkg, ok := files["package.json"]
+	if !ok {
+		t.Fatal("no root package.json; `npm install git+...` cannot find the client")
+	}
+	if !strings.Contains(pkg, `"version": "`+InitialSpecVersion+`"`) {
+		t.Error("package.json version does not track the spec version")
+	}
+	// Without `files`, the published tarball carries the Go service too.
+	if !strings.Contains(pkg, `"files"`) {
+		t.Error("package.json has no files list; the Go source would ship to consumers")
+	}
+
+	js, ok := files["clients/ts/index.js"]
+	if !ok {
+		t.Fatal("no clients/ts/index.js")
+	}
+	for _, want := range []string{
+		"X-Client-Version", "singleRetry", "exponentialRetry",
+		"noRetry", "CircuitOpenError", "Breaker",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("the TypeScript client has no %s; it does not match the Go client's defaults", want)
+		}
+	}
+
+	if _, ok := files["clients/ts/index.d.ts"]; !ok {
+		t.Error("no clients/ts/index.d.ts; consumers get no types for the client itself")
+	}
+
+	// The types come from the spec, so CI has to catch a stale schema
+	// the same way it catches stale Go.
+	if !strings.Contains(a.Workflow, "clients/ts/schema.d.ts") {
+		t.Error("CI does not check that the TypeScript schema is current")
 	}
 }

@@ -15,6 +15,12 @@ func init() {
 			{"go", "generate", "./..."},
 			{"go", "get", "-u", "./..."},
 			{"go", "mod", "tidy"},
+			// The TypeScript client's types come from the same spec.
+			// Pinned to openapi-typescript 7 because it requires
+			// TypeScript ^5 and breaks on 7; running it through npx
+			// keeps that constraint out of the service's own
+			// dependencies, which stay current.
+			{"npx", "--yes", "openapi-typescript@7", "openapi.yml", "-o", "clients/ts/schema.d.ts"},
 		},
 		files: map[string]string{
 			"go.mod.tmpl":         "go.mod",
@@ -26,8 +32,15 @@ func init() {
 			"client_test.go.tmpl": "api/client_test.go",
 			"paging.go.tmpl":      "api/paging.go",
 			"paging_test.go.tmpl": "api/paging_test.go",
-			"gitignore":           ".gitignore",
-			"dockerignore":        ".dockerignore",
+
+			// The TypeScript client. package.json sits at the repo root
+			// because npm looks for it there when installing from git -
+			// `files` keeps the Go source out of the published tarball.
+			"clients_ts_package.json.tmpl": "package.json",
+			"clients_ts_index.js.tmpl":     "clients/ts/index.js",
+			"clients_ts_index.d.ts.tmpl":   "clients/ts/index.d.ts",
+			"gitignore":                    ".gitignore",
+			"dockerignore":                 ".dockerignore",
 		},
 	})
 

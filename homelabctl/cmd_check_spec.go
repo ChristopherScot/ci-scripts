@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,11 +96,39 @@ func checkClientVersion(dir, specVersion string, add func(string, ...any)) {
 	if err != nil {
 		return // no generated client in this service
 	}
-	m := clientVersionConst.FindSubmatch(b)
-	if m == nil {
+	if m := clientVersionConst.FindSubmatch(b); m != nil {
+		if got := string(m[1]); got != specVersion {
+			add("api/client.go reports ClientVersion %q but openapi.yml says %q - bump both, or X-Client-Version lies", got, specVersion)
+		}
+	}
+
+	// The TypeScript client carries the same version twice: the package
+	// version consumers install, and the constant it reports.
+	checkTSClientVersion(dir, specVersion, add)
+}
+
+var tsClientVersion = regexp.MustCompile(`ClientVersion\s*=\s*'([^']*)'`)
+
+func checkTSClientVersion(dir, specVersion string, add func(string, ...any)) {
+	if b, err := os.ReadFile(filepath.Join(dir, "clients", "ts", "index.js")); err == nil {
+		if m := tsClientVersion.FindSubmatch(b); m != nil {
+			if got := string(m[1]); got != specVersion {
+				add("clients/ts/index.js reports ClientVersion %q but openapi.yml says %q", got, specVersion)
+			}
+		}
+	}
+
+	b, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
 		return
 	}
-	if got := string(m[1]); got != specVersion {
-		add("client.go reports ClientVersion %q but openapi.yml says %q - bump both, or X-Client-Version lies", got, specVersion)
+	var pkg struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(b, &pkg) != nil || pkg.Version == "" {
+		return
+	}
+	if pkg.Version != specVersion {
+		add("package.json is version %q but openapi.yml says %q - consumers would install a version the API does not claim", pkg.Version, specVersion)
 	}
 }
