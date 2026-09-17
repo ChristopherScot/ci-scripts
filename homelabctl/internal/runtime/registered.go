@@ -5,6 +5,9 @@ package runtime
 func init() {
 	Register(embedded{
 		name: "go-service", dir: "go-service", deployable: true, hardened: true,
+		// Without go.sum the service does not build, and the generated
+		// go.mod names dependencies it does not lock.
+		resolve: []string{"go", "mod", "tidy"},
 		files: map[string]string{
 			"go.mod.tmpl":       "go.mod",
 			"main.go.tmpl":      "main.go",
@@ -19,6 +22,7 @@ func init() {
 	// self-update command homelabctl uses.
 	Register(embedded{
 		name: "go-cli", dir: "go-cli", deployable: false, hardened: false,
+		resolve: []string{"go", "mod", "tidy"},
 		files: map[string]string{
 			"go.mod.tmpl":        "go.mod",
 			"main.go.tmpl":       "main.go",
@@ -32,6 +36,9 @@ func init() {
 
 	Register(embedded{
 		name: "node-service", dir: "node-service", deployable: true, hardened: true,
+		// Generates package-lock.json, which the Dockerfile's `npm ci`
+		// requires and which is not otherwise created.
+		resolve: []string{"npm", "install", "--package-lock-only"},
 		files: map[string]string{
 			"package.json.tmpl": "package.json",
 			"server.js.tmpl":    "server.js",

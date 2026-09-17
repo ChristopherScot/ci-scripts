@@ -101,6 +101,19 @@ type Runtime interface {
 	// SupportsHardened reports whether images from this runtime can run
 	// non-root with a read-only root filesystem.
 	SupportsHardened() bool
+
+	// ResolveDeps is the command that turns a declared dependency list
+	// into a locked one - `go mod tidy`, `npm install --package-lock-only`
+	// - run once in the new service directory. Nil if the language needs
+	// no such step.
+	//
+	// It belongs here rather than in a switch at the call site because it
+	// is the one build concern that cannot be expressed as a template.
+	// init used to infer it from a "go-"/"node-" prefix on the runtime
+	// name, so a language whose name did not start with one of those got
+	// no lockfile and no warning - and a Go service without go.sum does
+	// not build at all.
+	ResolveDeps() []string
 }
 
 var registry = map[string]Runtime{}

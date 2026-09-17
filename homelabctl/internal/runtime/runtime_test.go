@@ -165,3 +165,39 @@ func TestArtifactsAreDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// Dependency resolution used to be inferred from a "go-"/"node-" prefix on
+// the runtime name, in a switch at the call site. A runtime whose name did
+// not start with one of those silently got no lockfile - and a Go service
+// without go.sum does not build at all. Every runtime that generates a
+// manifest of dependencies must declare how to lock it.
+func TestRuntimesDeclareDependencyResolution(t *testing.T) {
+	manifests := map[string]string{
+		"go.mod":       "go",
+		"package.json": "npm",
+	}
+
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q) = %v", name, err)
+		}
+		files := r.Artifacts(Params{Name: "svc", Module: "example.com/svc", Port: 3000}).Files
+
+		for _, f := range files {
+			tool, needsLock := manifests[f.Path]
+			if !needsLock {
+				continue
+			}
+			argv := r.ResolveDeps()
+			if len(argv) == 0 {
+				t.Errorf("%s generates %s but declares no ResolveDeps; its scaffold will not build",
+					name, f.Path)
+				continue
+			}
+			if argv[0] != tool {
+				t.Errorf("%s generates %s but resolves with %q", name, f.Path, argv[0])
+			}
+		}
+	}
+}

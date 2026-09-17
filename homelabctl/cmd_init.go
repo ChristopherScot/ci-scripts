@@ -135,18 +135,14 @@ func runInit(o initOpts) error {
 // tidy resolves the generated module's dependencies. Best-effort: a
 // missing toolchain or no network should not lose the scaffold, but it is
 // reported, because the result will not build until it is run.
-func tidy(dir, runtimeName string) error {
-	var cmd *exec.Cmd
-	switch {
-	case strings.HasPrefix(runtimeName, "go-"):
-		cmd = exec.Command("go", "mod", "tidy")
-	case strings.HasPrefix(runtimeName, "node-"):
-		// Generates package-lock.json, which the Dockerfile's `npm ci`
-		// requires and which is not otherwise created.
-		cmd = exec.Command("npm", "install", "--package-lock-only")
-	default:
+// tidy runs the runtime's dependency-resolution command in the new
+// service directory. What to run is the runtime's business, declared in
+// registered.go; this only knows how to run it.
+func tidy(dir string, argv []string) error {
+	if len(argv) == 0 {
 		return nil
 	}
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s in %s: %w\n%s", strings.Join(cmd.Args, " "), dir, err, out)
@@ -362,7 +358,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	// so a template that declares any dependency is dead on arrival.
 	if o.skipTidy {
 		// nothing to resolve
-	} else if err := tidy(dir, r.Name()); err != nil {
+	} else if err := tidy(dir, r.ResolveDeps()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 

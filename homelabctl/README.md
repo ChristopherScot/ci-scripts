@@ -38,6 +38,10 @@ the image-updater annotations and CI are identical across languages.
 Register(embedded{
     name: "python-service", dir: "python-service",
     deployable: true, hardened: true,
+    // How to lock declared dependencies, run once in the new service
+    // directory. Omit only if the language has no such step - a
+    // scaffold whose manifest is unlocked may not build.
+    resolve: []string{"pip-compile", "requirements.in"},
     files: map[string]string{
         "main.py.tmpl":    "main.py",
         "gitignore":       ".gitignore",

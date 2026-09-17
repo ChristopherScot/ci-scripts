@@ -29,6 +29,9 @@ type embedded struct {
 	deployable bool
 	hardened   bool
 
+	// resolve is the dependency-locking command, if the language has one.
+	resolve []string
+
 	// files maps a template file to the path it is written to in the
 	// generated service. A .tmpl suffix means it is rendered with Params;
 	// anything else is copied verbatim.
@@ -37,6 +40,7 @@ type embedded struct {
 
 func (e embedded) Name() string           { return e.name }
 func (e embedded) SupportsHardened() bool { return e.hardened }
+func (e embedded) ResolveDeps() []string  { return e.resolve }
 
 func (e embedded) read(name string) string {
 	b, err := templates.ReadFile(path.Join("templates", e.dir, name))
