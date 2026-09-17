@@ -32,26 +32,73 @@ const log = pino({
 // parse the body - which reads as a data problem rather than a missing
 // endpoint. Minimal exposition rather than a dependency; swap in prom-client
 // when this service has metrics worth naming.
+// Request counts, keyed by the ROUTE this server recognises rather than
+// the raw URL. There is no router here to report a matched pattern, so
+// anything unrecognised is counted as "other": a label per distinct URL
+// would give Prometheus unbounded cardinality, and a URL can carry a
+// token or an id that must not reach a label or a log line.
+const counts = new Map()
+
+function count(route, method, status) {
+  const key = `${route}|${method}|${status}`
+  counts.set(key, (counts.get(key) || 0) + 1)
+}
+
 function metrics() {
   const up = Math.floor((Date.now() - started) / 1000)
-  return [
+  const lines = [
     '# HELP process_uptime_seconds Seconds since process start.',
     '# TYPE process_uptime_seconds gauge',
     `process_uptime_seconds ${up}`,
     '# HELP nodejs_heap_used_bytes Heap in use.',
     '# TYPE nodejs_heap_used_bytes gauge',
     `nodejs_heap_used_bytes ${process.memoryUsage().heapUsed}`,
-    '',
-  ].join('\n')
+    '# HELP http_requests_total Requests by route, method and status.',
+    '# TYPE http_requests_total counter',
+  ]
+  for (const [key, n] of counts) {
+    const [route, method, status] = key.split('|')
+    lines.push(`http_requests_total{route="${route}",method="${method}",status="${status}"} ${n}`)
+  }
+  lines.push('')
+  return lines.join('\n')
 }
 
+// Routes this server answers. Matching against a known set is what keeps
+// an arbitrary URL out of the logs and metrics below.
+const ROUTES = new Set(['/', '/healthz', '/metrics'])
+
 const server = createServer((req, res) => {
-  if (req.url === '/healthz') {
+  const start = process.hrtime.bigint()
+  // Strip the query string before matching: it is not part of the route
+  // and routinely carries values that should not be logged.
+  const path = (req.url || '/').split('?')[0]
+  const route = ROUTES.has(path) ? path : 'other'
+
+  res.on('finish', () => {
+    // Alloy scrapes /metrics every 15s and the kubelet probes /healthz as
+    // often; logging those buries real traffic and inflates the counters
+    // with self-observation.
+    if (path === '/metrics' || path === '/healthz') return
+
+    const ms = Number(process.hrtime.bigint() - start) / 1e6
+    count(route, req.method, res.statusCode)
+    log.info(
+      { method: req.method, route, status: res.statusCode, duration_ms: Math.round(ms) },
+      'request',
+    )
+  })
+
+  if (path === '/healthz') {
     res.writeHead(200).end('ok\n')
     return
   }
-  if (req.url === '/metrics') {
+  if (path === '/metrics') {
     res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' }).end(metrics())
+    return
+  }
+  if (path !== '/') {
+    res.writeHead(404).end('not found\n')
     return
   }
   res.writeHead(200).end('{{ .Name }}\n')

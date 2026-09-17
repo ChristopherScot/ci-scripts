@@ -236,3 +236,71 @@ func TestDeployableRuntimesStampLogContext(t *testing.T) {
 		}
 	}
 }
+
+// Defaults a deployable service should not have to remember. Each of
+// these was written by hand in approvald first; a template that omits
+// them makes every new service rediscover the same things.
+func TestDeployableRuntimesSetServiceDefaults(t *testing.T) {
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q) = %v", name, err)
+		}
+		a := r.Artifacts(Params{
+			Name: "svc", Team: "platform",
+			Module: "example.com/svc", Port: 3000,
+		})
+		if !a.Deployable {
+			continue
+		}
+
+		var entry string
+		for _, f := range a.Files {
+			if f.Path == "main.go" || f.Path == "server.js" {
+				entry = f.Body
+			}
+		}
+
+		// Requests are logged, and the counter that Alloy scrapes counts
+		// them - the annotation is otherwise pointed at runtime metrics
+		// that say nothing about the service.
+		for _, want := range []string{"request", "http_requests_total", "duration_ms"} {
+			if !strings.Contains(entry, want) {
+				t.Errorf("%s: no %s in its entrypoint", name, want)
+			}
+		}
+
+		// The route label and log field must come from a matched route,
+		// never the raw URL: a path can carry a token or an id, and this
+		// reaches both the log aggregator and a metric label.
+		if !strings.Contains(entry, "route") {
+			t.Errorf("%s: does not log a route", name)
+		}
+
+		// Self-observation: /metrics is scraped every 15s and /healthz
+		// probed as often. Logging them buries real traffic.
+		if !strings.Contains(entry, "/metrics") || !strings.Contains(entry, "/healthz") {
+			t.Errorf("%s: does not exclude its own probe endpoints", name)
+		}
+	}
+}
+
+// A Server with no timeouts lets a slow client hold a connection open
+// indefinitely. approvald sets these; the template must too.
+func TestGoServiceSetsServerTimeouts(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var main string
+	for _, f := range r.Artifacts(Params{Name: "svc", Module: "example.com/svc", Port: 3000}).Files {
+		if f.Path == "main.go" {
+			main = f.Body
+		}
+	}
+	for _, want := range []string{"ReadHeaderTimeout", "ReadTimeout", "WriteTimeout", "IdleTimeout"} {
+		if !strings.Contains(main, want) {
+			t.Errorf("go-service does not set %s", want)
+		}
+	}
+}

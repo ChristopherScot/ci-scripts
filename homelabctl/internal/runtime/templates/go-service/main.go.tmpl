@@ -8,11 +8,79 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// Request metrics, labelled by the matched PATTERN rather than the raw
+// path: a label per distinct URL would give Prometheus unbounded
+// cardinality and eventually take it down.
+var (
+	requests = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "http_requests_total",
+		Help: "Requests by route, method and status.",
+	}, []string{"route", "method", "status"})
+
+	latency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "http_request_duration_seconds",
+		Help:    "Request latency by route and method.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"route", "method"})
+)
+
+// statusRecorder captures the status code, which http.ResponseWriter does
+// not expose after the fact.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// observe logs and measures every request.
+//
+// It records the matched route pattern, never the raw URI: a path can
+// carry a token or an id, and this writes to both the log aggregator and
+// a metric label. ServeMux exposes the pattern from Go 1.22 on.
+func observe(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+
+		// Alloy scrapes /metrics every 15s and the kubelet probes
+		// /healthz as often; logging those buries real traffic and
+		// inflates the counters with self-observation.
+		switch r.URL.Path {
+		case "/metrics", "/healthz":
+			return
+		}
+
+		route := r.Pattern
+		if route == "" {
+			route = "unmatched"
+		}
+		elapsed := time.Since(start)
+		status := strconv.Itoa(rec.status)
+
+		requests.WithLabelValues(route, r.Method, status).Inc()
+		latency.WithLabelValues(route, r.Method).Observe(elapsed.Seconds())
+
+		slog.Info("request",
+			"method", r.Method,
+			"route", route,
+			"status", rec.status,
+			"duration_ms", elapsed.Milliseconds())
+	})
+}
 
 // version is stamped by CI with -ldflags "-X main.version=...". The
 // fallback is what a local `go build` produces.
@@ -47,7 +115,17 @@ func main() {
 	if port == "" {
 		port = "{{ .Port }}"
 	}
-	srv := &http.Server{Addr: "0.0.0.0:" + port, Handler: mux}
+	// A Server with no timeouts lets a slow client hold a connection
+	// open indefinitely - the Slowloris shape - and govulncheck flags the
+	// missing ReadHeaderTimeout specifically.
+	srv := &http.Server{
+		Addr:              "0.0.0.0:" + port,
+		Handler:           observe(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	// Without this, SIGTERM kills in-flight requests on every deploy.
 	// Kubernetes sends SIGTERM, waits terminationGracePeriodSeconds, then
