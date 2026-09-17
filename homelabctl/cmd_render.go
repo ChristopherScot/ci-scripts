@@ -91,7 +91,7 @@ func runRender(o renderOpts) error {
 	case len(findings) > 0:
 		if reportPreflight(findings) && !o.force {
 			return fmt.Errorf("\nrefusing to render: the above would break the running service.\n" +
-				"fix config.yaml, or pass --o.force if this is intended")
+				"fix config.yaml, or pass --force if this is intended")
 		}
 	case !o.dryRun:
 		// nothing to report
