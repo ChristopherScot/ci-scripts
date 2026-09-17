@@ -5,22 +5,26 @@ package runtime
 func init() {
 	Register(embedded{
 		name: "go-service", dir: "go-service", deployable: true, hardened: true,
-		// Generate from the spec FIRST: api/ does not exist until ogen
-		// runs, so `go get` and the build would both fail on a missing
-		// import. `go get -u` then upgrades the transitive graph, which
-		// tidy alone resolves to the minimums each dependency declares -
-		// older than what is released. Without tidy there is no go.sum
-		// and the service does not build at all.
-		resolve: [][]string{
+		// Everything derived from openapi.yml. Deterministic: the same
+		// spec produces the same output, so CI can run these and fail on
+		// a diff.
+		generate: [][]string{
 			{"go", "generate", "./..."},
-			{"go", "get", "-u", "./..."},
-			{"go", "mod", "tidy"},
 			// The TypeScript client's types come from the same spec.
 			// Pinned to openapi-typescript 7 because it requires
 			// TypeScript ^5 and breaks on 7; running it through npx
 			// keeps that constraint out of the service's own
 			// dependencies, which stay current.
 			{"npx", "--yes", "openapi-typescript@7", "openapi.yml", "-o", "clients/ts/schema.d.ts"},
+		},
+		// Run once, by init. `go get -u` starts a new service on current
+		// transitive versions - tidy alone resolves to the minimums each
+		// dependency declares, which are older than what is released.
+		// Without tidy there is no go.sum and the service does not build
+		// at all.
+		resolve: [][]string{
+			{"go", "get", "-u", "./..."},
+			{"go", "mod", "tidy"},
 		},
 		files: map[string]string{
 			"go.mod.tmpl":         "go.mod",

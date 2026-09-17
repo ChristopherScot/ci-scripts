@@ -77,9 +77,11 @@ func runRegen(cfgPath string, checkOnly bool) error {
 		return fmt.Errorf("%d file(s) out of date - run `homelabctl regen`", len(stale))
 	}
 
-	// The commands are the runtime's, not this command's: the same list
-	// `init` runs, so scaffolding and regenerating cannot diverge.
-	if err := tidy(dir, r.ResolveDeps()); err != nil {
+	// Generate only, never ResolveDeps: regenerating must be
+	// deterministic. `go get -u` belongs to creating a service, and
+	// running it here would mean CI - which runs this and diffs - failed
+	// on any day a dependency published.
+	if err := tidy(dir, r.Generate()); err != nil {
 		return err
 	}
 	for _, s := range stale {

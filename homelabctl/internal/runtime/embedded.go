@@ -29,7 +29,11 @@ type embedded struct {
 	deployable bool
 	hardened   bool
 
-	// resolve are the dependency-locking commands, run in order.
+	// generate rebuilds what the service's own sources derive; must be
+	// deterministic, since CI diffs the result.
+	generate [][]string
+
+	// resolve are the dependency-locking commands, run once by init.
 	resolve [][]string
 
 	// files maps a template file to the path it is written to in the
@@ -40,6 +44,7 @@ type embedded struct {
 
 func (e embedded) Name() string            { return e.name }
 func (e embedded) SupportsHardened() bool  { return e.hardened }
+func (e embedded) Generate() [][]string    { return e.generate }
 func (e embedded) ResolveDeps() [][]string { return e.resolve }
 
 func (e embedded) read(name string) string {

@@ -114,14 +114,24 @@ type Runtime interface {
 	// non-root with a read-only root filesystem.
 	SupportsHardened() bool
 
-	// ResolveDeps are the commands that turn a declared dependency list
-	// into a locked one, run in order in the new service directory. Nil if
-	// the language needs no such step.
+	// Generate are the commands that rebuild everything derived from the
+	// service's own sources - its OpenAPI spec, say. Run in order, in the
+	// service directory. Nil if a runtime generates nothing.
 	//
-	// A list rather than one command because Go needs two: the template
-	// pins only its direct dependency, and `go mod tidy` alone resolves
-	// the transitive graph to the MINIMUMS that dependency declares - so a
-	// brand new service would start on versions already months old.
+	// These must be DETERMINISTIC: `regen` runs them, and CI runs `regen`
+	// and fails on a diff. A command whose output depends on the day
+	// would turn that into a red build nobody caused.
+	Generate() [][]string
+
+	// ResolveDeps are the commands that turn a declared dependency list
+	// into a locked one. Run once by `init`, after Generate.
+	//
+	// These may be non-deterministic, and one of them is: a new Go
+	// service runs `go get -u` so it starts on current transitive
+	// versions rather than the minimums its direct dependency declares,
+	// which are typically months old. That is right when creating a
+	// service and wrong afterwards, which is why it is separate from
+	// Generate.
 	//
 	// It belongs here rather than in a switch at the call site because it
 	// is the one build concern that cannot be expressed as a template.

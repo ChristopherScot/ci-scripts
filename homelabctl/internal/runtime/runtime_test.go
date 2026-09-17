@@ -446,16 +446,25 @@ func TestGoServiceIsSpecFirst(t *testing.T) {
 		t.Errorf("generate.go does not invoke ogen:\n%s", gen)
 	}
 
-	// Generation must run before the module is tidied: api/ does not
+	// init runs Generate before ResolveDeps, and must: api/ does not
 	// exist until ogen has run, so `go get` would fail on the import.
 	var order []string
-	for _, cmd := range r.ResolveDeps() {
+	for _, cmd := range append(r.Generate(), r.ResolveDeps()...) {
 		order = append(order, strings.Join(cmd, " "))
 	}
 	joined := strings.Join(order, " | ")
 	genAt, tidyAt := strings.Index(joined, "generate"), strings.Index(joined, "tidy")
 	if genAt < 0 || tidyAt < 0 || genAt > tidyAt {
 		t.Errorf("generation must precede tidy, got: %v", order)
+	}
+
+	// Regenerating must be deterministic: `regen` runs Generate and CI
+	// diffs the result, so a command whose output depends on the day
+	// would be a red build nobody caused.
+	for _, cmd := range r.Generate() {
+		if strings.Contains(strings.Join(cmd, " "), "-u") {
+			t.Errorf("Generate runs an upgrading command, which belongs in ResolveDeps: %v", cmd)
+		}
 	}
 
 	// CI must reject a spec that was changed without regenerating.
@@ -624,7 +633,9 @@ func TestGoServiceShipsATypeScriptClient(t *testing.T) {
 	if !strings.Contains(a.Workflow, "homelabctl regen") {
 		t.Error("CI does not regenerate from the spec before diffing")
 	}
-	if !strings.Contains(a.Workflow, "clients/") {
-		t.Error("CI's staleness diff does not cover the TypeScript client")
+	// regen covers both clients, so CI diffing its output covers the
+	// TypeScript one without naming it.
+	if !strings.Contains(a.Workflow, "git diff --exit-code") {
+		t.Error("CI regenerates but never diffs, so nothing fails on stale output")
 	}
 }

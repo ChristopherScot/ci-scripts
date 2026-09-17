@@ -362,7 +362,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	// so a template that declares any dependency is dead on arrival.
 	if o.skipTidy {
 		// nothing to resolve
-	} else if err := tidy(dir, r.ResolveDeps()); err != nil {
+	} else if err := tidy(dir, append(r.Generate(), r.ResolveDeps()...)); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 

@@ -43,13 +43,13 @@ jobs:
       #
       # `regen` runs the same commands `init` does, so CI cannot check a
       # different thing than a developer regenerates.
-      # Scoped to what the SPEC derives. regen also runs `go get -u`, so
-      # a bare `git diff` would fail whenever any dependency released -
-      # unrelated to the spec, and on a day nobody touched this repo.
+      # regen is deterministic - it generates from the spec and does not
+      # touch dependencies - so the whole tree can be diffed. Anything it
+      # changes here is something a spec edit should have regenerated.
       - name: Check generated code is current
         run: |
           ./homelabctl regen
-          git diff --exit-code -- api/ clients/ openapi.yml package.json \
+          git diff --exit-code \
             || { echo "::error::generated code is stale - run 'homelabctl regen' and commit"; exit 1; }
 
       - name: Check deploy manifests
