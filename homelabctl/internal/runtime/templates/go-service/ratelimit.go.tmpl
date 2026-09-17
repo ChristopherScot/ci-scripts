@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"{{ .Module }}/api"
 )
 
 // Rate limiting, and telling the caller enough to behave well.
@@ -20,13 +22,37 @@ import (
 //
 // Off by default. A service behind the LAN ingress with one caller does
 // not need it, and a limiter that nobody tuned rejects real traffic.
+//
+// PER POD, NOT PER SERVICE. The buckets are in memory, so N replicas
+// allow N times the configured rate. That is fine for protecting a pod
+// from one abusive caller - each pod defends itself - and wrong for
+// enforcing a quota, because the total depends on how many replicas
+// happen to be running. A quota needs shared state (Redis, or a proxy in
+// front like Clever's sphinx); this deliberately does not have it, since
+// a rate limiter that can fail to reach Redis is a new way for the
+// service to fall over.
+//
+// Set the limit per POD accordingly: `replicas: 3` with RATE_LIMIT_RPS=10
+// admits 30/s in the worst case.
 
-// Limiter is a token bucket per key. Rate is the sustained rate in
-// requests per second; Burst is how much idle credit can accumulate, and
-// so how large a spike is allowed through.
+// Policy is a sustained rate and the burst allowed above it.
+type Policy struct {
+	Rate  float64 // requests per second
+	Burst float64 // idle credit, so how large a spike passes
+}
+
+// Limiter is a token bucket per caller, per operation.
+//
+// Per operation because endpoints are not equally expensive: a read that
+// hits a cache and a write that fans out to three services should not
+// share a budget. The operation ID comes from the spec, so a limit cannot
+// drift from the route it governs the way a path regex can.
 type Limiter struct {
-	Rate  float64
-	Burst float64
+	// Default applies to any operation without its own entry.
+	Default Policy
+
+	// PerOperation overrides Default, keyed by the spec's operationId.
+	PerOperation map[string]Policy
 
 	mu      sync.Mutex
 	buckets map[string]*bucket
@@ -40,30 +66,50 @@ type bucket struct {
 
 func NewLimiter(rate, burst float64) *Limiter {
 	return &Limiter{
-		Rate:    rate,
-		Burst:   burst,
-		buckets: map[string]*bucket{},
-		now:     time.Now,
+		Default:      Policy{Rate: rate, Burst: burst},
+		PerOperation: map[string]Policy{},
+		buckets:      map[string]*bucket{},
+		now:          time.Now,
 	}
 }
 
-// allow spends a token for key. When none is available it reports how long
-// the caller must wait for one, which is what Retry-After carries.
-func (l *Limiter) allow(key string) (bool, time.Duration) {
+// For sets a limit for one operation, overriding the default.
+//
+//	limiter().For("createThing", Policy{Rate: 1, Burst: 2})
+func (l *Limiter) For(operationID string, p Policy) *Limiter {
+	l.PerOperation[operationID] = p
+	return l
+}
+
+// policy returns the limit governing an operation.
+func (l *Limiter) policy(operationID string) Policy {
+	if p, ok := l.PerOperation[operationID]; ok {
+		return p
+	}
+	return l.Default
+}
+
+// allow spends a token for one caller on one operation. When none is
+// available it reports how long the caller must wait, which is what
+// Retry-After carries.
+func (l *Limiter) allow(caller, operationID string) (bool, time.Duration) {
+	p := l.policy(operationID)
+	k := caller + "\x00" + operationID
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := l.now()
-	b, ok := l.buckets[key]
+	b, ok := l.buckets[k]
 	if !ok {
-		b = &bucket{tokens: l.Burst, last: now}
-		l.buckets[key] = b
+		b = &bucket{tokens: p.Burst, last: now}
+		l.buckets[k] = b
 	}
 
 	// Refill for the time since the last request, capped at Burst.
-	b.tokens += now.Sub(b.last).Seconds() * l.Rate
-	if b.tokens > l.Burst {
-		b.tokens = l.Burst
+	b.tokens += now.Sub(b.last).Seconds() * p.Rate
+	if b.tokens > p.Burst {
+		b.tokens = p.Burst
 	}
 	b.last = now
 
@@ -74,20 +120,20 @@ func (l *Limiter) allow(key string) (bool, time.Duration) {
 
 	// Retry-After is whole seconds, and rounding DOWN would invite a
 	// retry that is still too early - so round up, minimum one second.
-	wait := time.Duration((1-b.tokens)/l.Rate*float64(time.Second)) + time.Second - 1
+	wait := time.Duration((1-b.tokens)/p.Rate*float64(time.Second)) + time.Second - 1
 	if wait < time.Second {
 		wait = time.Second
 	}
 	return false, wait
 }
 
-// remaining reports the tokens left for key, for RateLimit-Remaining.
-func (l *Limiter) remaining(key string) int {
+// remaining reports the tokens left, for RateLimit-Remaining.
+func (l *Limiter) remaining(caller, operationID string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	b, ok := l.buckets[key]
+	b, ok := l.buckets[caller+"\x00"+operationID]
 	if !ok {
-		return int(l.Burst)
+		return int(l.policy(operationID).Burst)
 	}
 	if b.tokens < 0 {
 		return 0
@@ -119,42 +165,63 @@ func key(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// router is what a rate limiter needs from the generated server: which
+// operation a request would reach. Satisfied by *api.Server.
+type router interface {
+	FindRoute(method, path string) (api.Route, bool)
+}
+
 // rateLimit rejects requests over the limit with 429 and the headers a
 // caller needs to back off correctly.
 //
-// Retry-After (RFC 9110) is the one that matters: it is stable, and both
+// This is HTTP middleware rather than ogen middleware, and that is
+// forced: ogen's middleware.Response carries only a response type and
+// its error path only a status and body, so neither can set Retry-After
+// - which is the entire point. Instead it asks the generated router
+// which operation the request would reach, and keeps control of the
+// response.
+//
+// A request matching no operation is not limited: it is about to 404, and
+// creating a bucket for it would let an unrouted path fill memory.
+//
+// Retry-After (RFC 9110) is the header that matters - stable, and both
 // generated clients honour it in preference to their own backoff.
-// RateLimit-Limit and RateLimit-Remaining are advisory - the IETF field
-// is still a draft, so these follow the widely deployed de-facto names
-// and are safe for a client to ignore.
-func rateLimit(l *Limiter, next http.Handler) http.Handler {
+// RateLimit-* are advisory, since the IETF field is still a draft, so
+// these follow the widely deployed de-facto names.
+func rateLimit(l *Limiter, r router, next http.Handler) http.Handler {
 	if l == nil {
 		return next
 	}
-	limit := strconv.Itoa(int(l.Burst))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Probes and scrapes are not callers. Limiting them means the
-		// kubelet can restart a pod for being busy.
-		switch r.URL.Path {
-		case "/healthz", "/metrics":
-			next.ServeHTTP(w, r)
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		route, ok := r.FindRoute(req.Method, req.URL.Path)
+		if !ok {
+			next.ServeHTTP(w, req)
+			return
+		}
+		op := route.OperationID()
+
+		// The kubelet probes /healthz as often as every few seconds;
+		// limiting it lets a busy pod be restarted for being busy.
+		if op == "getHealthz" {
+			next.ServeHTTP(w, req)
 			return
 		}
 
-		k := key(r)
-		ok, wait := l.allow(k)
+		caller := key(req)
+		allowed, wait := l.allow(caller, op)
+		p := l.policy(op)
 
-		w.Header().Set("RateLimit-Limit", limit)
-		w.Header().Set("RateLimit-Remaining", strconv.Itoa(l.remaining(k)))
+		w.Header().Set("RateLimit-Limit", strconv.Itoa(int(p.Burst)))
+		w.Header().Set("RateLimit-Remaining", strconv.Itoa(l.remaining(caller, op)))
 
-		if !ok {
+		if !allowed {
 			secs := int(wait.Seconds())
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
 			w.Header().Set("RateLimit-Reset", strconv.Itoa(secs))
-			rateLimited.Inc()
+			rateLimited.WithLabelValues(op).Inc()
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, req)
 	})
 }

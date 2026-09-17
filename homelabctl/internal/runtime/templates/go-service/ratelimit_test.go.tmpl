@@ -5,7 +5,23 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"{{ .Module }}/api"
 )
+
+// realRouter builds the generated server, so these exercise the actual
+// route table. api.Route's operationID is unexported, so a stub cannot
+// report a real operation - and testing against the real router is the
+// better test anyway: it catches a limit keyed on an operation the spec
+// does not have.
+func realRouter(t *testing.T) *api.Server {
+	t.Helper()
+	srv, err := api.NewServer(service{})
+	if err != nil {
+		t.Fatalf("api.NewServer: %v", err)
+	}
+	return srv
+}
 
 func TestLimiterAllowsBurstThenRejects(t *testing.T) {
 	l := NewLimiter(2, 3)
@@ -13,11 +29,11 @@ func TestLimiterAllowsBurstThenRejects(t *testing.T) {
 	l.now = func() time.Time { return frozen } // no refill
 
 	for i := 1; i <= 3; i++ {
-		if ok, _ := l.allow("caller"); !ok {
+		if ok, _ := l.allow("caller", "op"); !ok {
 			t.Fatalf("request %d rejected inside the burst of 3", i)
 		}
 	}
-	ok, wait := l.allow("caller")
+	ok, wait := l.allow("caller", "op")
 	if ok {
 		t.Fatal("a fourth request passed a burst of 3")
 	}
@@ -33,14 +49,14 @@ func TestLimiterRefillsOverTime(t *testing.T) {
 	now := time.Now()
 	l.now = func() time.Time { return now }
 
-	l.allow("c")
-	l.allow("c")
-	if ok, _ := l.allow("c"); ok {
+	l.allow("c", "op")
+	l.allow("c", "op")
+	if ok, _ := l.allow("c", "op"); ok {
 		t.Fatal("bucket was not exhausted")
 	}
 
 	now = now.Add(time.Second) // 2 rps => 2 tokens
-	if ok, _ := l.allow("c"); !ok {
+	if ok, _ := l.allow("c", "op"); !ok {
 		t.Error("bucket did not refill after a second")
 	}
 }
@@ -71,11 +87,12 @@ func TestKeyPrefersTheForwardedClient(t *testing.T) {
 }
 
 func TestRateLimitSetsRetryAfter(t *testing.T) {
-	h := rateLimit(NewLimiter(1, 1), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	h := rateLimit(NewLimiter(1, 1), realRouter(t),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
 
-	req := httptest.NewRequest(http.MethodGet, "/thing", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.0.0.9:1111"
 
 	if w := httptest.NewRecorder(); func() int { h.ServeHTTP(w, req); return w.Code }() != http.StatusOK {
@@ -99,9 +116,13 @@ func TestRateLimitSetsRetryAfter(t *testing.T) {
 
 // Limiting the kubelet's probe means it can restart a pod for being busy.
 func TestRateLimitExemptsProbes(t *testing.T) {
-	h := rateLimit(NewLimiter(1, 1), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	h := rateLimit(NewLimiter(1, 1), realRouter(t),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	// /metrics is not in the spec, so the router reports no operation and
+	// the limiter passes it through - which is what should happen to
+	// anything it cannot name.
 	for _, path := range []string{"/healthz", "/metrics"} {
 		for i := 0; i < 5; i++ {
 			req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -117,14 +138,51 @@ func TestRateLimitExemptsProbes(t *testing.T) {
 
 // Off unless configured: a limit nobody tuned rejects real traffic.
 func TestNilLimiterIsAPassthrough(t *testing.T) {
-	h := rateLimit(nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	h := rateLimit(nil, realRouter(t),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
 	for i := 0; i < 50; i++ {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("request %d rejected with no limiter configured", i+1)
 		}
+	}
+}
+
+// Endpoints are not equally expensive: a cached read and a write that
+// fans out should not share a budget.
+func TestPerOperationPolicyOverridesTheDefault(t *testing.T) {
+	l := NewLimiter(10, 10).For("expensive", Policy{Rate: 1, Burst: 1})
+	frozen := time.Now()
+	l.now = func() time.Time { return frozen }
+
+	if ok, _ := l.allow("c", "expensive"); !ok {
+		t.Fatal("the first expensive request was rejected")
+	}
+	if ok, _ := l.allow("c", "expensive"); ok {
+		t.Error("a second expensive request passed a burst of 1")
+	}
+	// The default operation still has its own, larger budget.
+	for i := 0; i < 10; i++ {
+		if ok, _ := l.allow("c", "cheap"); !ok {
+			t.Fatalf("cheap request %d rejected under the default burst of 10", i+1)
+		}
+	}
+}
+
+// One caller exhausting one endpoint must not lock itself out of others.
+func TestOperationsHaveSeparateBuckets(t *testing.T) {
+	l := NewLimiter(1, 1)
+	frozen := time.Now()
+	l.now = func() time.Time { return frozen }
+
+	l.allow("c", "a")
+	if ok, _ := l.allow("c", "a"); ok {
+		t.Fatal("operation a was not exhausted")
+	}
+	if ok, _ := l.allow("c", "b"); !ok {
+		t.Error("exhausting operation a also blocked operation b")
 	}
 }

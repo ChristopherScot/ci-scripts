@@ -174,6 +174,25 @@ one caller does not need it, and a limit nobody tuned rejects real
 traffic. Set it in `config.yaml`'s `env` when you want it, with an
 optional `RATE_LIMIT_BURST` (defaults to one second of headroom).
 
+Limits are **per operation**, keyed on the spec's `operationId` rather
+than a path pattern that can drift from the route it governs. A cached
+read and a write that fans out to three services should not share a
+budget:
+
+```go
+limiter().For("createThing", Policy{Rate: 1, Burst: 2})
+```
+
+**The buckets are per pod, not per service.** `replicas: 3` with
+`RATE_LIMIT_RPS=10` admits 30/s in the worst case. That is right for
+protecting a pod from one abusive caller - each pod defends itself - and
+wrong for enforcing a quota, where the total would depend on how many
+replicas happen to be running. A real quota needs shared state (Redis) or
+a proxy in front, like Clever's sphinx; this deliberately has neither,
+because a limiter that can fail to reach Redis is a new way for the
+service to fall over. Set the number per pod accordingly, or put a proxy
+in front when you need a true global limit.
+
 A 429 carries `Retry-After`, and both clients honour it in preference to
 their own backoff - so a caller importing this service's client backs off
 correctly with no code. RFC 9110 allows a delay in seconds or an
