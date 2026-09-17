@@ -107,17 +107,10 @@ func checkClientVersion(dir, specVersion string, add func(string, ...any)) {
 	checkTSClientVersion(dir, specVersion, add)
 }
 
-var tsClientVersion = regexp.MustCompile(`ClientVersion\s*=\s*'([^']*)'`)
-
 func checkTSClientVersion(dir, specVersion string, add func(string, ...any)) {
-	if b, err := os.ReadFile(filepath.Join(dir, "clients", "ts", "index.js")); err == nil {
-		if m := tsClientVersion.FindSubmatch(b); m != nil {
-			if got := string(m[1]); got != specVersion {
-				add("clients/ts/index.js reports ClientVersion %q but openapi.yml says %q", got, specVersion)
-			}
-		}
-	}
-
+	// clients/ts/index.js reads its version from package.json, so there
+	// is nothing to drift there - only package.json itself is written by
+	// hand, and it is what a consumer installs.
 	b, err := os.ReadFile(filepath.Join(dir, "package.json"))
 	if err != nil {
 		return

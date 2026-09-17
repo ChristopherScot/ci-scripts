@@ -599,6 +599,12 @@ func TestGoServiceShipsATypeScriptClient(t *testing.T) {
 	if !ok {
 		t.Fatal("no clients/ts/index.js")
 	}
+	// The version is read from package.json, never copied here - the
+	// header cannot then disagree with the version a consumer installed.
+	if !strings.Contains(js, "pkg.version") {
+		t.Error("the TypeScript client hardcodes its version instead of reading package.json")
+	}
+
 	for _, want := range []string{
 		"X-Client-Version", "singleRetry", "exponentialRetry",
 		"noRetry", "CircuitOpenError", "Breaker",

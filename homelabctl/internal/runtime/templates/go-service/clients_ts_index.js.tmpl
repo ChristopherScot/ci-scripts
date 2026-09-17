@@ -16,9 +16,15 @@
 import createFetchClient from 'openapi-fetch'
 
 /** Sent on every request, so a server can see which client versions are
- *  still calling it before changing something they depend on. Tracks the
+ *  still calling it before changing something they depend on.
+ *
+ *  Read from package.json rather than written here: package.json is the
+ *  version a consumer actually installed, so deriving it means the header
+ *  cannot disagree with what they have. package.json in turn tracks the
  *  spec's info.version. */
-export const ClientVersion = '{{ .SpecVersion }}'
+import pkg from '../../package.json' with { type: 'json' }
+
+export const ClientVersion = pkg.version
 export const ClientVersionHeader = 'X-Client-Version'
 
 /** Repeat only what is safe to repeat: a POST may already have applied,
