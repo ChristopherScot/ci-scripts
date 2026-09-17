@@ -83,3 +83,62 @@ func TestIdempotentRequestIsRetriedOnce(t *testing.T) {
 		t.Errorf("GET made %d attempts, want 2 (initial + one retry)", hits)
 	}
 }
+
+// The server knows when capacity returns; the client does not.
+func TestRetryAfterBeatsThePolicyBackoff(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		if hits == 1 {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	start := time.Now()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	resp, err := NewHTTPClient(HTTPOptions{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 after the retry", resp.StatusCode)
+	}
+	// SingleRetry would have waited 1s; the server said 2.
+	if elapsed < 2*time.Second {
+		t.Errorf("waited %v, want >= 2s - the server's Retry-After was ignored", elapsed)
+	}
+}
+
+// A server can say 3600; sleeping that long inside a request is
+// indistinguishable from a hang.
+func TestRetryAfterIsCapped(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Retry-After": []string{"3600"}}}
+	if _, ok := retryAfter(resp, 30*time.Second); ok {
+		t.Error("accepted an hour-long Retry-After")
+	}
+}
+
+func TestRetryAfterAcceptsAnHTTPDate(t *testing.T) {
+	when := time.Now().Add(3 * time.Second).UTC().Format(http.TimeFormat)
+	resp := &http.Response{Header: http.Header{"Retry-After": []string{when}}}
+	d, ok := retryAfter(resp, 30*time.Second)
+	if !ok {
+		t.Fatal("rejected a valid HTTP-date")
+	}
+	if d < 1*time.Second || d > 4*time.Second {
+		t.Errorf("parsed delay = %v, want about 3s", d)
+	}
+}
+
+func TestUnparseableRetryAfterFallsBackToThePolicy(t *testing.T) {
+	resp := &http.Response{Header: http.Header{"Retry-After": []string{"soon-ish"}}}
+	if _, ok := retryAfter(resp, 30*time.Second); ok {
+		t.Error("accepted an unparseable Retry-After")
+	}
+}

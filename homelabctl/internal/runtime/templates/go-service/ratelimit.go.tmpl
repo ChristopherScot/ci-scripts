@@ -1,0 +1,160 @@
+package main
+
+import (
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Rate limiting, and telling the caller enough to behave well.
+//
+// A 429 with no Retry-After is worse than no limit at all: a client that
+// retries gets to choose when, and a client written by someone else will
+// choose badly. Answering with Retry-After moves the decision to the side
+// that knows - and the generated clients honour it, so a caller that
+// imports this service's client backs off correctly without writing any
+// code.
+//
+// Off by default. A service behind the LAN ingress with one caller does
+// not need it, and a limiter that nobody tuned rejects real traffic.
+
+// Limiter is a token bucket per key. Rate is the sustained rate in
+// requests per second; Burst is how much idle credit can accumulate, and
+// so how large a spike is allowed through.
+type Limiter struct {
+	Rate  float64
+	Burst float64
+
+	mu      sync.Mutex
+	buckets map[string]*bucket
+	now     func() time.Time // swappable for tests
+}
+
+type bucket struct {
+	tokens float64
+	last   time.Time
+}
+
+func NewLimiter(rate, burst float64) *Limiter {
+	return &Limiter{
+		Rate:    rate,
+		Burst:   burst,
+		buckets: map[string]*bucket{},
+		now:     time.Now,
+	}
+}
+
+// allow spends a token for key. When none is available it reports how long
+// the caller must wait for one, which is what Retry-After carries.
+func (l *Limiter) allow(key string) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	b, ok := l.buckets[key]
+	if !ok {
+		b = &bucket{tokens: l.Burst, last: now}
+		l.buckets[key] = b
+	}
+
+	// Refill for the time since the last request, capped at Burst.
+	b.tokens += now.Sub(b.last).Seconds() * l.Rate
+	if b.tokens > l.Burst {
+		b.tokens = l.Burst
+	}
+	b.last = now
+
+	if b.tokens >= 1 {
+		b.tokens--
+		return true, 0
+	}
+
+	// Retry-After is whole seconds, and rounding DOWN would invite a
+	// retry that is still too early - so round up, minimum one second.
+	wait := time.Duration((1-b.tokens)/l.Rate*float64(time.Second)) + time.Second - 1
+	if wait < time.Second {
+		wait = time.Second
+	}
+	return false, wait
+}
+
+// remaining reports the tokens left for key, for RateLimit-Remaining.
+func (l *Limiter) remaining(key string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.buckets[key]
+	if !ok {
+		return int(l.Burst)
+	}
+	if b.tokens < 0 {
+		return 0
+	}
+	return int(b.tokens)
+}
+
+// key identifies the caller by IP.
+//
+// X-Forwarded-For first: every request arrives from the ingress
+// controller, so RemoteAddr would be one bucket for the whole cluster and
+// one noisy caller would rate-limit everyone.
+//
+// The port must be stripped. RemoteAddr is host:port and the port is
+// ephemeral, so keying on it gives every CONNECTION its own bucket - a
+// per-client limit that never limits, which is what this did until a test
+// caught it.
+func key(r *http.Request) string {
+	if f := r.Header.Get("X-Forwarded-For"); f != "" {
+		// Left-most is the original client; the rest are proxies.
+		if i := strings.IndexByte(f, ','); i >= 0 {
+			f = f[:i]
+		}
+		return strings.TrimSpace(f)
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// rateLimit rejects requests over the limit with 429 and the headers a
+// caller needs to back off correctly.
+//
+// Retry-After (RFC 9110) is the one that matters: it is stable, and both
+// generated clients honour it in preference to their own backoff.
+// RateLimit-Limit and RateLimit-Remaining are advisory - the IETF field
+// is still a draft, so these follow the widely deployed de-facto names
+// and are safe for a client to ignore.
+func rateLimit(l *Limiter, next http.Handler) http.Handler {
+	if l == nil {
+		return next
+	}
+	limit := strconv.Itoa(int(l.Burst))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Probes and scrapes are not callers. Limiting them means the
+		// kubelet can restart a pod for being busy.
+		switch r.URL.Path {
+		case "/healthz", "/metrics":
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		k := key(r)
+		ok, wait := l.allow(k)
+
+		w.Header().Set("RateLimit-Limit", limit)
+		w.Header().Set("RateLimit-Remaining", strconv.Itoa(l.remaining(k)))
+
+		if !ok {
+			secs := int(wait.Seconds())
+			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			w.Header().Set("RateLimit-Reset", strconv.Itoa(secs))
+			rateLimited.Inc()
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

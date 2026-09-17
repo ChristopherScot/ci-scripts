@@ -24,6 +24,10 @@ export declare class Breaker {
   record(failed: boolean): void
 }
 
+/** Reads a Retry-After header, in milliseconds. Undefined when absent,
+ *  unparseable, or further away than maxMs. */
+export declare function retryAfterMs(res: Response | undefined, maxMs: number): number | undefined
+
 export interface ClientOptions {
   baseUrl: string
   /** Bounds a single attempt. Default 5000; a retry gets its own. */
@@ -32,6 +36,9 @@ export interface ClientOptions {
   policy?: RetryPolicy
   /** Omit to disable circuit breaking. */
   breaker?: Breaker
+  /** Bounds how long a server's Retry-After can park this client.
+   *  Default 30000. */
+  maxRetryAfterMs?: number
 }
 
 /** The typed client. Paths and response shapes come from openapi.yml, so

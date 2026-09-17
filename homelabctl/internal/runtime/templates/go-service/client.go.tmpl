@@ -4,6 +4,8 @@ import (
 	"errors"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -149,13 +151,19 @@ type HTTPOptions struct {
 	Policy RetryPolicy
 	// Breaker is optional; nil disables circuit breaking.
 	Breaker *Breaker
+
+	// MaxRetryAfter bounds how long a server's Retry-After can park this
+	// client. Zero means 30s. A server may answer with an hour, and
+	// sleeping that long inside a request looks exactly like a hang.
+	MaxRetryAfter time.Duration
 }
 
 // HTTPClient satisfies ogen's ht.Client.
 type HTTPClient struct {
-	http    *http.Client
-	policy  RetryPolicy
-	breaker *Breaker
+	http          *http.Client
+	policy        RetryPolicy
+	breaker       *Breaker
+	maxRetryAfter time.Duration
 }
 
 var _ ht.Client = (*HTTPClient)(nil)
@@ -168,11 +176,53 @@ func NewHTTPClient(o HTTPOptions) *HTTPClient {
 	if o.Policy == nil {
 		o.Policy = SingleRetry{}
 	}
-	return &HTTPClient{
-		http:    &http.Client{Timeout: o.Timeout},
-		policy:  o.Policy,
-		breaker: o.Breaker,
+	if o.MaxRetryAfter == 0 {
+		o.MaxRetryAfter = 30 * time.Second
 	}
+	return &HTTPClient{
+		http:          &http.Client{Timeout: o.Timeout},
+		policy:        o.Policy,
+		breaker:       o.Breaker,
+		maxRetryAfter: o.MaxRetryAfter,
+	}
+}
+
+// retryAfter reads the server's own answer to "when should I come back".
+//
+// A client that retries a 429 on its own schedule is the reason rate
+// limits have to be strict. RFC 9110 allows either a delay in seconds or
+// an HTTP-date, and servers send both in the wild.
+//
+// The cap matters: a server can say 3600, and a client that sleeps for an
+// hour inside a request is indistinguishable from one that hung.
+func retryAfter(resp *http.Response, max time.Duration) (time.Duration, bool) {
+	if resp == nil {
+		return 0, false
+	}
+	v := resp.Header.Get("Retry-After")
+	if v == "" {
+		return 0, false
+	}
+
+	var d time.Duration
+	if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+		if secs < 0 {
+			return 0, false
+		}
+		d = time.Duration(secs) * time.Second
+	} else if t, err := http.ParseTime(v); err == nil {
+		d = time.Until(t)
+		if d < 0 {
+			d = 0
+		}
+	} else {
+		return 0, false // unparseable; fall back to the policy's backoff
+	}
+
+	if d > max {
+		return 0, false // too long to wait inside a request
+	}
+	return d, true
 }
 
 func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -191,12 +241,22 @@ func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 		if attempt >= len(backoffs) || !c.policy.Retry(req, resp, err) {
 			break
 		}
+
+		// The server's Retry-After wins over the policy's backoff: it
+		// knows when capacity returns and the client does not. Falling
+		// back to the policy when the header is absent, unparseable, or
+		// further away than maxRetryAfter.
+		wait := backoffs[attempt]
+		if d, ok := retryAfter(resp, c.maxRetryAfter); ok {
+			wait = d
+		}
+
 		// Not draining the body here leaks the connection back to the
 		// pool unusable.
 		if resp != nil {
 			resp.Body.Close()
 		}
-		time.Sleep(backoffs[attempt])
+		time.Sleep(wait)
 	}
 	if c.breaker != nil {
 		c.breaker.record(err != nil || (resp != nil && resp.StatusCode >= http.StatusInternalServerError))

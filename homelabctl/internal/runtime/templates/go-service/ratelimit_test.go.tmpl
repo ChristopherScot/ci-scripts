@@ -1,0 +1,130 @@
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+func TestLimiterAllowsBurstThenRejects(t *testing.T) {
+	l := NewLimiter(2, 3)
+	frozen := time.Now()
+	l.now = func() time.Time { return frozen } // no refill
+
+	for i := 1; i <= 3; i++ {
+		if ok, _ := l.allow("caller"); !ok {
+			t.Fatalf("request %d rejected inside the burst of 3", i)
+		}
+	}
+	ok, wait := l.allow("caller")
+	if ok {
+		t.Fatal("a fourth request passed a burst of 3")
+	}
+	// Retry-After is whole seconds, so anything under a second would
+	// invite a retry that is still too early.
+	if wait < time.Second {
+		t.Errorf("Retry-After would be %v, want at least 1s", wait)
+	}
+}
+
+func TestLimiterRefillsOverTime(t *testing.T) {
+	l := NewLimiter(2, 2)
+	now := time.Now()
+	l.now = func() time.Time { return now }
+
+	l.allow("c")
+	l.allow("c")
+	if ok, _ := l.allow("c"); ok {
+		t.Fatal("bucket was not exhausted")
+	}
+
+	now = now.Add(time.Second) // 2 rps => 2 tokens
+	if ok, _ := l.allow("c"); !ok {
+		t.Error("bucket did not refill after a second")
+	}
+}
+
+// Keying on RemoteAddr keeps the ephemeral port, so every CONNECTION gets
+// its own bucket and a per-client limit never limits. That shipped once.
+func TestKeyIgnoresTheEphemeralPort(t *testing.T) {
+	a := httptest.NewRequest(http.MethodGet, "/", nil)
+	a.RemoteAddr = "10.0.0.5:54321"
+	b := httptest.NewRequest(http.MethodGet, "/", nil)
+	b.RemoteAddr = "10.0.0.5:54999"
+
+	if key(a) != key(b) {
+		t.Errorf("same client got two buckets: %q vs %q", key(a), key(b))
+	}
+}
+
+// Every request arrives from the ingress controller, so RemoteAddr would
+// be one bucket for the whole cluster.
+func TestKeyPrefersTheForwardedClient(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "10.0.0.1:1234" // the ingress
+	r.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
+
+	if got := key(r); got != "203.0.113.9" {
+		t.Errorf("key = %q, want the original client", got)
+	}
+}
+
+func TestRateLimitSetsRetryAfter(t *testing.T) {
+	h := rateLimit(NewLimiter(1, 1), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/thing", nil)
+	req.RemoteAddr = "10.0.0.9:1111"
+
+	if w := httptest.NewRecorder(); func() int { h.ServeHTTP(w, req); return w.Code }() != http.StatusOK {
+		t.Fatal("the first request was rejected")
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", w.Code)
+	}
+	// Without this a client picks its own delay, which is the reason
+	// rate limits have to be strict.
+	if w.Header().Get("Retry-After") == "" {
+		t.Error("429 carried no Retry-After")
+	}
+	if w.Header().Get("RateLimit-Limit") == "" {
+		t.Error("no RateLimit-Limit")
+	}
+}
+
+// Limiting the kubelet's probe means it can restart a pod for being busy.
+func TestRateLimitExemptsProbes(t *testing.T) {
+	h := rateLimit(NewLimiter(1, 1), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, path := range []string{"/healthz", "/metrics"} {
+		for i := 0; i < 5; i++ {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.RemoteAddr = "10.0.0.9:2222"
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s rejected on request %d", path, i+1)
+			}
+		}
+	}
+}
+
+// Off unless configured: a limit nobody tuned rejects real traffic.
+func TestNilLimiterIsAPassthrough(t *testing.T) {
+	h := rateLimit(nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	for i := 0; i < 50; i++ {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("request %d rejected with no limiter configured", i+1)
+		}
+	}
+}

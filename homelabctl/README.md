@@ -167,6 +167,29 @@ for item, err := range api.Paged(ctx, func(ctx context.Context, cursor string) (
 }
 ```
 
+### Rate limiting
+
+Off unless `RATE_LIMIT_RPS` is set - a service behind the LAN ingress with
+one caller does not need it, and a limit nobody tuned rejects real
+traffic. Set it in `config.yaml`'s `env` when you want it, with an
+optional `RATE_LIMIT_BURST` (defaults to one second of headroom).
+
+A 429 carries `Retry-After`, and both clients honour it in preference to
+their own backoff - so a caller importing this service's client backs off
+correctly with no code. RFC 9110 allows a delay in seconds or an
+HTTP-date; both are handled, and a value further out than
+`MaxRetryAfter` (30s) falls back to the policy rather than parking a
+request for an hour.
+
+`RateLimit-Limit` and `RateLimit-Remaining` are advisory - the IETF
+field is still a draft, so these follow the widely deployed de-facto
+names and are safe to ignore. `http_requests_rate_limited_total` is worth
+alerting on: a rising count is either an abusive caller or a limit set too
+low, and those look identical from outside.
+
+Probes are exempt. Limiting `/healthz` means the kubelet can restart a
+pod for being busy.
+
 Every request carries `X-Client-Version`, so a server can see which client
 versions still call it before changing something they depend on. It tracks
 the spec's `info.version`; `regen` keeps them in step.

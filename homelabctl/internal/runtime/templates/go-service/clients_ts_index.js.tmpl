@@ -64,6 +64,32 @@ export const exponentialRetry = {
 /** For a caller that would rather fail fast. */
 export const noRetry = { backoffs: () => [], retry: () => false }
 
+/** Reads the server's own answer to "when should I come back".
+ *
+ *  A client that retries a 429 on its own schedule is the reason rate
+ *  limits have to be strict. RFC 9110 allows either a delay in seconds
+ *  or an HTTP-date, and servers send both in the wild.
+ *
+ *  Returns undefined when the header is absent, unparseable, or further
+ *  away than maxMs - a server can say 3600, and sleeping an hour inside
+ *  a request is indistinguishable from a hang. */
+export function retryAfterMs(res, maxMs) {
+  const v = res?.headers?.get('retry-after')
+  if (!v) return undefined
+
+  let ms
+  const secs = Number(v.trim())
+  if (Number.isInteger(secs)) {
+    if (secs < 0) return undefined
+    ms = secs * 1000
+  } else {
+    const when = Date.parse(v)
+    if (Number.isNaN(when)) return undefined
+    ms = Math.max(0, when - Date.now())
+  }
+  return ms > maxMs ? undefined : ms
+}
+
 export class CircuitOpenError extends Error {
   constructor() {
     super('circuit open')
@@ -111,7 +137,14 @@ export class Breaker {
  * @param {object} [options.policy=singleRetry]
  * @param {Breaker} [options.breaker] omit to disable circuit breaking.
  */
-export default function createClient({ baseUrl, timeoutMs = 5000, policy = singleRetry, breaker }) {
+export default function createClient({
+  baseUrl,
+  timeoutMs = 5000,
+  policy = singleRetry,
+  breaker,
+  // Bounds how long a server's Retry-After can park this client.
+  maxRetryAfterMs = 30_000,
+}) {
   const resilientFetch = async (input, init) => {
     const req = new Request(input, init)
     req.headers.set(ClientVersionHeader, ClientVersion)
@@ -131,7 +164,12 @@ export default function createClient({ baseUrl, timeoutMs = 5000, policy = singl
         res = undefined
       }
       if (attempt >= backoffs.length || !policy.retry(req, res, err)) break
-      await new Promise((r) => setTimeout(r, backoffs[attempt]))
+
+      // The server's Retry-After wins over the policy's backoff: it
+      // knows when capacity returns and the client does not.
+      const after = retryAfterMs(res, maxRetryAfterMs)
+      const wait = after ?? backoffs[attempt]
+      await new Promise((r) => setTimeout(r, wait))
     }
 
     breaker?.record(err !== undefined || (res !== undefined && res.status >= 500))
