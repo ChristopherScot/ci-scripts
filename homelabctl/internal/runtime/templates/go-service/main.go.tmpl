@@ -39,13 +39,6 @@ var (
 		Help:    "Request latency by operation and method.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"operation", "method"})
-
-	// Worth alerting on: a rising count is either an abusive caller or a
-	// limit set too low, and the two look identical from the outside.
-	rateLimited = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "http_requests_rate_limited_total",
-		Help: "Requests rejected with 429, by operation.",
-	}, []string{"operation"})
 )
 
 // service implements the generated api.Handler. Adding an operation to
@@ -123,32 +116,7 @@ func handler() (http.Handler, error) {
 	// handler those annotations point at a 404.
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/", srv)
-
-	// srv doubles as the router: the limiter asks it which operation a
-	// request would reach, so a limit is keyed on the spec rather than on
-	// a path pattern that can drift from it.
-	return rateLimit(limiter(), srv, mux), nil
-}
-
-// limiter builds the rate limiter from the environment, or nil to leave
-// the service unlimited.
-//
-// Off unless RATE_LIMIT_RPS is set: a service behind the LAN ingress with
-// one caller does not need limiting, and a limit nobody tuned rejects
-// real traffic. Set it in config.yaml's env when you want it.
-func limiter() *Limiter {
-	rps, err := strconv.ParseFloat(os.Getenv("RATE_LIMIT_RPS"), 64)
-	if err != nil || rps <= 0 {
-		return nil
-	}
-	// Burst defaults to one second of headroom, so a caller that is
-	// within its rate on average is not rejected for arriving unevenly.
-	burst := rps
-	if b, err := strconv.ParseFloat(os.Getenv("RATE_LIMIT_BURST"), 64); err == nil && b > 0 {
-		burst = b
-	}
-	slog.Info("rate limiting enabled", "rps", rps, "burst", burst)
-	return NewLimiter(rps, burst)
+	return mux, nil
 }
 
 func main() {

@@ -24,18 +24,17 @@ func init() {
 		// older than what is released.
 		upgrade: [][]string{{"go", "get", "-u", "./..."}},
 		files: map[string]string{
-			"go.mod.tmpl":            "go.mod",
-			"main.go.tmpl":           "main.go",
-			"main_test.go.tmpl":      "main_test.go",
-			"openapi.yml.tmpl":       "openapi.yml",
-			"README.md.tmpl":         "README.md",
-			"generate.go.tmpl":       "generate.go",
-			"client.go.tmpl":         "api/client.go",
-			"ratelimit.go.tmpl":      "ratelimit.go",
-			"ratelimit_test.go.tmpl": "ratelimit_test.go",
-			"client_test.go.tmpl":    "api/client_test.go",
-			"paging.go.tmpl":         "api/paging.go",
-			"paging_test.go.tmpl":    "api/paging_test.go",
+			"go.mod.tmpl":       "go.mod",
+			"main.go.tmpl":      "main.go",
+			"main_test.go.tmpl": "main_test.go",
+			"openapi.yml.tmpl":  "openapi.yml",
+			"README.md.tmpl":    "README.md",
+			"generate.go.tmpl":  "generate.go",
+			"client.go.tmpl":    "api/client.go",
+
+			"client_test.go.tmpl": "api/client_test.go",
+			"paging.go.tmpl":      "api/paging.go",
+			"paging_test.go.tmpl": "api/paging_test.go",
 
 			// The TypeScript client. package.json sits at the repo root
 			// because npm looks for it there when installing from git -

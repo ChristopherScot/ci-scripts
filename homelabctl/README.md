@@ -169,45 +169,40 @@ for item, err := range api.Paged(ctx, func(ctx context.Context, cursor string) (
 
 ### Rate limiting
 
-Off unless `RATE_LIMIT_RPS` is set - a service behind the LAN ingress with
-one caller does not need it, and a limit nobody tuned rejects real
-traffic. Set it in `config.yaml`'s `env` when you want it, with an
-optional `RATE_LIMIT_BURST` (defaults to one second of headroom).
+The template does not rate limit, deliberately.
 
-Limits are **per operation**, keyed on the spec's `operationId` rather
-than a path pattern that can drift from the route it governs. A cached
-read and a write that fans out to three services should not share a
-budget:
+An in-process limiter is per pod, so it cannot enforce a quota - the total
+depends on how many replicas happen to be running. And ingress-nginx
+already limits, one layer up, where it covers every service including the
+third-party ones this tool does not generate:
 
-```go
-limiter().For("createThing", Policy{Rate: 1, Burst: 2})
+```yaml
+# in config.yaml
+patches:
+  Ingress: |
+    metadata:
+      annotations:
+        nginx.ingress.kubernetes.io/limit-rps: "10"
+        # 429 with Retry-After, which the generated clients honour.
+        # nginx answers 503 with no Retry-After by default, and a
+        # client cannot tell that from the service being down.
+        nginx.ingress.kubernetes.io/limit-req-status-code: "429"
 ```
 
-**The buckets are per pod, not per service.** `replicas: 3` with
-`RATE_LIMIT_RPS=10` admits 30/s in the worst case. That is right for
-protecting a pod from one abusive caller - each pod defends itself - and
-wrong for enforcing a quota, where the total would depend on how many
-replicas happen to be running. A real quota needs shared state (Redis) or
-a proxy in front, like Clever's sphinx; this deliberately has neither,
-because a limiter that can fail to reach Redis is a new way for the
-service to fall over. Set the number per pod accordingly, or put a proxy
-in front when you need a true global limit.
+Note that nginx's limits are per CONTROLLER replica, so the same caveat
+applies there - it is a true global limit only while the controller runs
+one pod.
 
-A 429 carries `Retry-After`, and both clients honour it in preference to
-their own backoff - so a caller importing this service's client backs off
-correctly with no code. RFC 9110 allows a delay in seconds or an
-HTTP-date; both are handled, and a value further out than
-`MaxRetryAfter` (30s) falls back to the policy rather than parking a
-request for an hour.
+A service that genuinely needs a distributed quota - per API key, say -
+should talk to Redis directly, or sit behind a proxy built for it. That is
+a decision about a real dependency with its own failure mode, not
+something every scaffold should inherit.
 
-`RateLimit-Limit` and `RateLimit-Remaining` are advisory - the IETF
-field is still a draft, so these follow the widely deployed de-facto
-names and are safe to ignore. `http_requests_rate_limited_total` is worth
-alerting on: a rising count is either an abusive caller or a limit set too
-low, and those look identical from outside.
-
-Probes are exempt. Limiting `/healthz` means the kubelet can restart a
-pod for being busy.
+What the clients do is the half worth having by default: both honour
+`Retry-After` on a 429 in preference to their own backoff, whoever sent
+it. RFC 9110 allows a delay in seconds or an HTTP-date; both are handled,
+and a value further out than `MaxRetryAfter` (30s) falls back to the
+policy rather than parking a request for an hour.
 
 Every request carries `X-Client-Version`, so a server can see which client
 versions still call it before changing something they depend on. It tracks
