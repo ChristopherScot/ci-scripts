@@ -482,6 +482,18 @@ func TestGoServiceClientHasResilienceDefaults(t *testing.T) {
 		}
 	}
 
+	// Paging: a cursor loop written by hand is easy to get wrong, and a
+	// forgotten cursor update is an infinite loop against a real service.
+	var paging string
+	for _, f := range a.Files {
+		if f.Path == "paging.go" {
+			paging = f.Body
+		}
+	}
+	if !strings.Contains(paging, "iter.Seq2") {
+		t.Error("paging.go does not return a range-able sequence")
+	}
+
 	// The version the client reports must be the spec's, not a second
 	// number that drifts.
 	if !strings.Contains(client, `ClientVersion = "`+InitialSpecVersion+`"`) {

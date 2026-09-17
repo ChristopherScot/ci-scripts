@@ -24,6 +24,8 @@ func init() {
 			"generate.go.tmpl":    "generate.go",
 			"client.go.tmpl":      "client.go",
 			"client_test.go.tmpl": "client_test.go",
+			"paging.go.tmpl":      "paging.go",
+			"paging_test.go.tmpl": "paging_test.go",
 			"gitignore":           ".gitignore",
 			"dockerignore":        ".dockerignore",
 		},
