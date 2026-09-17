@@ -17,9 +17,10 @@ COPY package*.json ./
 # `npm ci` needs package-lock.json, which `homelabctl init` generates and
 # CI regenerates. --omit=dev keeps devDependencies out of the image.
 #
-# mkdir -p because a service with no dependencies yet installs nothing and
-# npm creates no node_modules - which would make the COPY below fail and
-# every freshly scaffolded service unbuildable until it grew a dependency.
+# mkdir -p guards the case where every dependency is a devDependency:
+# npm then installs nothing, creates no node_modules, and the COPY below
+# fails - making the service unbuildable for a reason that reads as a
+# missing file rather than an empty install.
 RUN npm ci --omit=dev && mkdir -p node_modules
 
 FROM gcr.io/distroless/nodejs22-debian12:nonroot

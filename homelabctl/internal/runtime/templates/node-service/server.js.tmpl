@@ -1,27 +1,31 @@
 import { createServer } from 'node:http'
+import pino from 'pino'
 
 const port = process.env.PORT || '{{ .Port }}'
 const started = Date.now()
 
-// Every line carries who emitted it. Alloy adds pod and namespace labels
-// in Loki, but a line copied into a ticket, an alert or a terminal arrives
-// without them - and "shutting down" from an unnamed service is not worth
-// much. VERSION is stamped by CI; it is "dev" for a local run.
-const logContext = {
-  service: '{{ .Name }}',
-  team: '{{ .Team }}',
-  version: process.env.VERSION || 'dev',
-}
-
-function log(msg, fields = {}) {
-  console.log(JSON.stringify({
-    time: new Date().toISOString(),
-    level: 'INFO',
-    msg,
-    ...logContext,
-    ...fields,
-  }))
-}
+// Configured to match what go-service's slog emits, so one Loki query
+// works against either runtime: an ISO-8601 `time`, an uppercase `level`
+// name rather than pino's numeric default, and `msg`. Without these
+// formatters the two runtimes describe the same events differently.
+//
+// The bindings put service, team and version on every line. Alloy adds
+// pod and namespace labels in Loki, but a line copied into a ticket, an
+// alert or a terminal arrives without them - and "shutting down" from an
+// unnamed service is not worth much. VERSION is stamped by CI; it is
+// "dev" for a local run.
+const log = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  base: {
+    service: '{{ .Name }}',
+    team: '{{ .Team }}',
+    version: process.env.VERSION || 'dev',
+  },
+  timestamp: () => `,"time":"${new Date().toISOString()}"`,
+  formatters: {
+    level: (label) => ({ level: label.toUpperCase() }),
+  },
+})
 
 // The deployment annotates this pod for scraping at /metrics. Without a
 // handler here Alloy would scrape the catch-all, get a 200, and fail to
@@ -54,13 +58,13 @@ const server = createServer((req, res) => {
 })
 
 server.listen(port, '0.0.0.0', () => {
-  log('started', { addr: ':' + port })
+  log.info({ addr: ':' + port }, 'started')
 })
 
 // Without this, SIGTERM kills in-flight requests on every deploy.
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
-    log('shutting down')
+    log.info('shutting down')
     server.close(() => process.exit(0))
   })
 }
