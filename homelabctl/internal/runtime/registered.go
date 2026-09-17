@@ -5,11 +5,14 @@ package runtime
 func init() {
 	Register(embedded{
 		name: "go-service", dir: "go-service", deployable: true, hardened: true,
-		// `go get -u` first: tidy alone would resolve the transitive
-		// graph to the minimums client_golang declares, which are older
-		// than what is released. Without either there is no go.sum and
-		// the service does not build at all.
+		// Generate from the spec FIRST: api/ does not exist until ogen
+		// runs, so `go get` and the build would both fail on a missing
+		// import. `go get -u` then upgrades the transitive graph, which
+		// tidy alone resolves to the minimums each dependency declares -
+		// older than what is released. Without tidy there is no go.sum
+		// and the service does not build at all.
 		resolve: [][]string{
+			{"go", "generate", "./..."},
 			{"go", "get", "-u", "./..."},
 			{"go", "mod", "tidy"},
 		},
@@ -17,6 +20,8 @@ func init() {
 			"go.mod.tmpl":       "go.mod",
 			"main.go.tmpl":      "main.go",
 			"main_test.go.tmpl": "main_test.go",
+			"openapi.yml.tmpl":  "openapi.yml",
+			"generate.go.tmpl":  "generate.go",
 			"gitignore":         ".gitignore",
 			"dockerignore":      ".dockerignore",
 		},

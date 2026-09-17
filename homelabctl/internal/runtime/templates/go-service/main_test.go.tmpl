@@ -7,62 +7,76 @@ import (
 	"testing"
 )
 
-func TestHealthz(t *testing.T) {
+func newHandler(t *testing.T) http.Handler {
+	t.Helper()
+	h, err := handler()
+	if err != nil {
+		t.Fatalf("handler() = %v", err)
+	}
+	return h
+}
+
+func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
 	w := httptest.NewRecorder()
-	healthz(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+	return w
+}
+
+func TestHealthz(t *testing.T) {
+	w := get(t, newHandler(t), "/healthz")
 	if w.Code != http.StatusOK {
-		t.Errorf("healthz status = %d, want %d", w.Code, http.StatusOK)
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), `"ok"`) {
+		t.Errorf("body = %q, want it to report ok", w.Body.String())
 	}
 }
 
 func TestRootIdentifiesTheService(t *testing.T) {
-	w := httptest.NewRecorder()
-	routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
-
+	w := get(t, newHandler(t), "/")
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
-	if got := strings.TrimSpace(w.Body.String()); got != "{{ .Name }}" {
-		t.Errorf("body = %q, want %q", got, "{{ .Name }}")
+	if !strings.Contains(w.Body.String(), `"{{ .Name }}"`) {
+		t.Errorf("body = %q, want it to name the service", w.Body.String())
+	}
+}
+
+// A path that is not in the spec is rejected by the generated router.
+func TestUnknownPathIsNotFound(t *testing.T) {
+	if w := get(t, newHandler(t), "/nope"); w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 
 func TestMetricsAreExposed(t *testing.T) {
-	h := observe(routes())
+	h := newHandler(t)
+	get(t, h, "/") // a request to record
 
-	// A request to record, so the counter exists to be scraped.
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-
+	w := get(t, h, "/metrics")
 	if w.Code != http.StatusOK {
 		t.Fatalf("metrics status = %d, want %d", w.Code, http.StatusOK)
 	}
 	body := w.Body.String()
-	// The counter the deployment's scrape annotation exists to collect.
-	if !strings.Contains(body, `http_requests_total{method="GET",route="/"`) {
-		t.Errorf("no request counter in /metrics:\n%s", body)
+	// The counter the deployment's scrape annotation exists to collect,
+	// labelled by the spec's operation ID.
+	if !strings.Contains(body, `http_requests_total{method="GET",operation="getRoot"`) {
+		t.Errorf("no request counter for getRoot:\n%s", body)
 	}
-	// The Go client's own process metrics.
 	if !strings.Contains(body, "go_goroutines") {
 		t.Error("no runtime metrics in /metrics")
 	}
 }
 
-// The route label is what reaches the log aggregator and the metric
-// labels. A raw URL there would write out whatever a caller put in the
-// path - a token, an id - and give Prometheus unbounded cardinality.
-func TestUnroutedPathIsNeverUsedAsALabel(t *testing.T) {
-	h := observe(routes())
+// Labels come from the spec's operation IDs, so a request path can never
+// reach a metric label - not by a fallback that has to stay correct, but
+// because an unrouted request never reaches the middleware at all.
+func TestRequestPathNeverBecomesALabel(t *testing.T) {
+	h := newHandler(t)
+	get(t, h, "/secret-token-value/deadbeef")
 
-	h.ServeHTTP(httptest.NewRecorder(),
-		httptest.NewRequest(http.MethodGet, "/secret-token-value/deadbeef", nil))
-
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-
-	if strings.Contains(w.Body.String(), "deadbeef") {
+	if body := get(t, h, "/metrics").Body.String(); strings.Contains(body, "deadbeef") {
 		t.Error("a request path reached a metric label")
 	}
 }

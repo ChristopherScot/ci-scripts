@@ -400,3 +400,48 @@ func TestRuntimesShipATestFile(t *testing.T) {
 		}
 	}
 }
+
+// go-service is spec-first: the API is described once, in openapi.yml,
+// and the compiler refuses to build until the handlers match. Losing any
+// piece of this turns the spec back into documentation that drifts.
+func TestGoServiceIsSpecFirst(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	a := r.Artifacts(Params{Name: "svc", Team: "t", Module: "example.com/svc", Port: 3000})
+
+	files := map[string]string{}
+	for _, f := range a.Files {
+		files[f.Path] = f.Body
+	}
+
+	// The spec itself, and the directive that turns it into code.
+	if _, ok := files["openapi.yml"]; !ok {
+		t.Error("no openapi.yml: the service has no API contract to generate from")
+	}
+	gen, ok := files["generate.go"]
+	if !ok {
+		t.Fatal("no generate.go: nothing regenerates the API")
+	}
+	if !strings.Contains(gen, "go:generate") || !strings.Contains(gen, "ogen") {
+		t.Errorf("generate.go does not invoke ogen:\n%s", gen)
+	}
+
+	// Generation must run before the module is tidied: api/ does not
+	// exist until ogen has run, so `go get` would fail on the import.
+	var order []string
+	for _, cmd := range r.ResolveDeps() {
+		order = append(order, strings.Join(cmd, " "))
+	}
+	joined := strings.Join(order, " | ")
+	genAt, tidyAt := strings.Index(joined, "generate"), strings.Index(joined, "tidy")
+	if genAt < 0 || tidyAt < 0 || genAt > tidyAt {
+		t.Errorf("generation must precede tidy, got: %v", order)
+	}
+
+	// CI must reject a spec that was changed without regenerating.
+	if !strings.Contains(a.Workflow, "git diff --exit-code") {
+		t.Error("CI does not check that generated code is current")
+	}
+}

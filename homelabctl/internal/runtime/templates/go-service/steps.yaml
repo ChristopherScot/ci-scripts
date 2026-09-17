@@ -3,6 +3,15 @@
           go-version-file: go.mod
           cache: true
 
+      # The spec is the source of truth, so what is committed must match
+      # what it generates. Without this a spec change can merge with
+      # stale code and the API silently diverges from its documentation.
+      - name: Check generated code is current
+        run: |
+          go generate ./...
+          git diff --exit-code -- api/ \
+            || { echo "::error::api/ is stale - run 'go generate ./...' and commit"; exit 1; }
+
       - name: Test
         run: go test -race ./...
 

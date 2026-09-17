@@ -53,6 +53,9 @@ func runCheck(dir string) error {
 		add("%s has no `images:` block for image-updater to write into", kPath)
 	}
 
+	// The spec lives beside the service, not in deploy/.
+	checkSpec(".", add)
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
