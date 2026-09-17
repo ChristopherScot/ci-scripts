@@ -643,3 +643,52 @@ func TestGoServiceShipsATypeScriptClient(t *testing.T) {
 		t.Error("CI regenerates but never diffs, so nothing fails on stale output")
 	}
 }
+
+// A teammate cloning a scaffolded service lands on a Go repo containing
+// openapi.yml, generate.go, api/, clients/ts/ and a package.json. The
+// per-file comments explain each one once opened; the README is what
+// orients someone before they open anything.
+func TestGoServiceShipsAReadme(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	a := r.Artifacts(Params{
+		Name: "svc", Team: "platform", Module: "example.com/svc", Owner: "acme",
+		Port: 3000, SpecVersion: InitialSpecVersion,
+	})
+
+	files := map[string]string{}
+	for _, f := range a.Files {
+		files[f.Path] = f.Body
+	}
+
+	readme, ok := files["README.md"]
+	if !ok {
+		t.Fatal("go-service ships no README")
+	}
+
+	// Templated, not generic.
+	for _, want := range []string{"# svc", "platform", "acme"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not mention %q, so it is not about this service", want)
+		}
+	}
+
+	// Every path it points at has to exist, or it sends people to files
+	// that are not there. config.yaml and deploy/ are excluded: init
+	// writes those, not the runtime.
+	for _, path := range []string{"openapi.yml", "main.go", "api/client.go", "api/paging.go"} {
+		if !strings.Contains(readme, path) {
+			continue // not described; nothing to verify
+		}
+		if _, ok := files[path]; !ok {
+			t.Errorf("README describes %s, which the runtime does not generate", path)
+		}
+	}
+
+	// The instruction that matters most: the spec is the source of truth.
+	if !strings.Contains(readme, "homelabctl regen") {
+		t.Error("README does not say how to regenerate after a spec change")
+	}
+}

@@ -3,11 +3,21 @@
 Scaffolds services and renders their Kubernetes manifests. One tool, one
 config schema, one place that encodes the cluster's conventions.
 
+A Go service is **spec-first**: `openapi.yml` is the source of truth, and
+the server interface, both clients and their validation are generated from
+it. Add a path to the spec, regenerate, and the build fails until the
+handler exists.
+
 ```sh
 homelabctl init myservice --runtime go-service --host myservice.example.com --public
 homelabctl init mytool --runtime go-cli
+
+homelabctl regen                 # after editing openapi.yml
+homelabctl regen --check         # what CI runs; exits 1 if anything is stale
+
 homelabctl render config.yaml ghcr.io/owner/svc@sha256:...  --out .
-homelabctl check deploy
+homelabctl check deploy          # deploy misconfigurations and spec problems
+homelabctl diff                  # what would change in the GitOps repo
 homelabctl update
 ```
 
@@ -38,10 +48,10 @@ the image-updater annotations and CI are identical across languages.
 Register(embedded{
     name: "python-service", dir: "python-service",
     deployable: true, hardened: true,
-    // How to lock declared dependencies, run once in the new service
-    // directory. Omit only if the language has no such step - a
-    // scaffold whose manifest is unlocked may not build.
-    resolve: []string{"pip-compile", "requirements.in"},
+    // See "The three build phases" below. Omit generate/upgrade if the
+    // language has neither; omit lock only if it has no lockfile, since
+    // a scaffold whose dependencies are unpinned may not build.
+    lock:    [][]string{{"pip-compile", "requirements.in"}},
     files: map[string]string{
         "main.py.tmpl":    "main.py",
         "gitignore":       ".gitignore",
@@ -71,6 +81,118 @@ A CLI is not deployed, so it gets no Dockerfile, no manifests and no Argo
 Application. Its CI cross-compiles on a VERSION bump and publishes assets
 named to match what its generated `update` command looks for.
 
+## Spec-first services
+
+A `go-service` describes its API once, in `openapi.yml`. Everything else is
+derived:
+
+| generated | from | by |
+|---|---|---|
+| `api/oas_*.go` — server interface, types, validation, Go client | the spec | [ogen](https://github.com/ogen-go/ogen) |
+| `clients/ts/schema.d.ts` — TypeScript types | the spec | openapi-typescript |
+
+The point is that the **compiler enforces the contract**. Add a path to the
+spec, run `homelabctl regen`, and the build fails with
+`service does not implement api.Handler (missing method GetThing)` until
+you write the handler. The spec cannot drift from the code, because the
+code will not compile if it does.
+
+CI runs `homelabctl regen` and diffs, so a spec edited without regenerating
+fails the build rather than shipping an API that disagrees with its own
+documentation.
+
+`homelabctl check` also reports spec problems that generate *fine* and
+still cost you something: a missing `operationId` (the generated method
+name and its metric label then follow the path, and change when it does), a
+duplicate `operationId`, a missing `default` response (handler errors
+render as an undocumented empty 500), a missing summary (the generated
+interface method has no documentation). It does not re-validate structure —
+ogen already rejects a broken spec with a better error.
+
+### The three build phases
+
+A runtime declares up to three groups of commands, and they are separate
+because they differ in one property that matters:
+
+| phase | does | deterministic | run by |
+|---|---|---|---|
+| `Generate` | rebuilds what the spec derives | yes | `init`, `regen` |
+| `Lock` | pins declared dependencies (`go mod tidy`) | yes | `init`, `regen` |
+| `Upgrade` | moves dependencies forward (`go get -u`) | **no** | `init` only |
+
+`regen` runs Generate and Lock. It never upgrades: CI runs `regen` and
+diffs, so an upgrade there would turn any day a dependency published into a
+red build nobody caused.
+
+`init` runs all three, in that order — generation first, because a lockfile
+cannot resolve an import that does not exist yet — so a new service starts
+on current transitive versions rather than the minimums its direct
+dependency declares.
+
+## Clients
+
+Both clients are generated from the spec and carry the same defaults, so a
+Node service and a Go service calling the same API behave the same way when
+it is slow or failing.
+
+ogen generates correct protocol code and deliberately stops there — no
+timeout, no retry, no breaker. `api/client.go` supplies those:
+
+```go
+c, err := api.NewClient(url, api.WithClient(api.NewHTTPClient(api.HTTPOptions{
+    Timeout: 5 * time.Second,          // the default
+    Policy:  api.SingleRetry{},        // the default
+    Breaker: &api.Breaker{Threshold: 5, Cooldown: 30 * time.Second},
+})))
+```
+
+Defaults are chosen for what they do to the **system**: one retry rather
+than five, because five can mean five times the traffic to something
+already struggling. `ExponentialRetry` (jittered, so a fleet does not retry
+in lockstep) and `NoRetry` are the escape hatches. Only idempotent methods
+are ever repeated — a POST may already have applied.
+
+`api/paging.go` turns a paged operation into a range loop, so a cursor loop
+written by hand — where a forgotten update is an infinite loop against a
+real service — is not something every caller reimplements:
+
+```go
+for item, err := range api.Paged(ctx, func(ctx context.Context, cursor string) (api.Page[Thing], error) {
+    res, err := c.ListThings(ctx, api.ListThingsParams{After: cursor})
+    ...
+}) {
+    if err != nil {
+        return err
+    }
+}
+```
+
+Every request carries `X-Client-Version`, so a server can see which client
+versions still call it before changing something they depend on. It tracks
+the spec's `info.version`; `regen` keeps them in step.
+
+## Releasing clients
+
+Neither client needs a registry. **The git tag is the artifact.**
+
+```sh
+# Go: api/ is committed and self-contained
+go get github.com/owner/myservice@v0.2.0
+
+# TypeScript: npm installs from a git ref
+npm install git+https://github.com/owner/myservice#v0.2.0
+```
+
+CI tags the repo when `info.version` changes, so a release is deliberate
+rather than every push, and one version covers the API and both its
+clients.
+
+For npm this works because `package.json` sits at the repo root — npm looks
+for it there and has no subdirectory syntax — with `files: [clients/ts]`
+keeping the Go source out of what consumers receive. npm records the
+resolved commit in the consumer's lockfile rather than the tag, so an
+install stays reproducible even if a tag moves.
+
 ## Things that fail silently, and what this tool does about them
 
 Each of these presented as a `Synced/Healthy` app with nothing shipping:
@@ -82,6 +204,11 @@ Each of these presented as a `Synced/Healthy` app with nothing shipping:
 | Missing `write-back-target` → the updater writes a separate `.argocd-source` file, so two files claim to set the image | always in the rendered Application |
 | Private package → `Could not get tags from registry: unauthorized` | documented; make the package public or give the updater a credential |
 | Root Dockerfile under a hardened pod → `permission denied`, no logs | runtimes build nonroot 65532 images matching the rendered securityContext |
+| Spec edited without regenerating → the API disagrees with its documentation | CI runs `regen` and diffs |
+| A request path in a metric label → unbounded Prometheus cardinality, and tokens written to a log aggregator | labels come from the spec's operation IDs; an unrouted request is rejected before middleware runs |
+| A handler error → ogen returns it to the caller and logs nothing, so a 500 leaves no trace | `NewError` logs it |
+| A client version header that lies → you cannot tell who is still calling | `check` fails when `info.version` and the clients disagree |
+| A service with no `port` → `targetPort: 0` and probes that can never pass, on manifests that apply cleanly | defaulted from one constant the schema and `init` flag also read |
 
 ## Config
 

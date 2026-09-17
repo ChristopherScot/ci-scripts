@@ -28,6 +28,7 @@ func init() {
 			"main.go.tmpl":        "main.go",
 			"main_test.go.tmpl":   "main_test.go",
 			"openapi.yml.tmpl":    "openapi.yml",
+			"README.md.tmpl":      "README.md",
 			"generate.go.tmpl":    "generate.go",
 			"client.go.tmpl":      "api/client.go",
 			"client_test.go.tmpl": "api/client_test.go",
