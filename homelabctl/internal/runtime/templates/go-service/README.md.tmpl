@@ -26,7 +26,8 @@ a spec change cannot merge without the code that matches it.
 
 ```
 openapi.yml          the API contract
-main.go              handlers, and the server's own concerns
+main.go              process lifecycle: logging, timeouts, shutdown
+server.go            handlers, metrics middleware, route mounting
 api/                 generated, plus two files that are not:
   client.go            timeouts, retries, circuit breaking
   paging.go            cursor iteration as a range loop
@@ -34,6 +35,11 @@ clients/ts/          the TypeScript client
 deploy/              Kubernetes manifests, rendered from config.yaml
 config.yaml          what this service is, for homelabctl
 ```
+
+`server.go` is the seam: a service whose shape the spec cannot express - a
+reverse proxy, say - replaces that one file with a hand-written
+`handler()`, and everything else stays as generated. Its header lists what
+a replacement has to keep.
 
 `api/client.go` and `api/paging.go` are hand-written and live in `api/` on
 purpose: a consumer imports that package, and getting the protocol client

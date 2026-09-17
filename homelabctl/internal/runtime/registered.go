@@ -26,6 +26,7 @@ func init() {
 		files: map[string]string{
 			"go.mod.tmpl":       "go.mod",
 			"main.go.tmpl":      "main.go",
+			"server.go.tmpl":    "server.go",
 			"main_test.go.tmpl": "main_test.go",
 			"openapi.yml.tmpl":  "openapi.yml",
 			"README.md.tmpl":    "README.md",

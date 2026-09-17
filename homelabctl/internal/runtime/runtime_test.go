@@ -239,14 +239,18 @@ func TestDeployableRuntimesStampLogContext(t *testing.T) {
 			continue // a CLI writes to a terminal, not an aggregator
 		}
 
+		// Across every source file the runtime ships, not one filename:
+		// the property is that the SERVICE does these things, and which
+		// file holds them is an implementation detail that has moved
+		// once already.
 		var entry string
 		for _, f := range a.Files {
-			if f.Path == "main.go" || f.Path == "server.js" {
-				entry = f.Body
+			if strings.HasSuffix(f.Path, ".go") || strings.HasSuffix(f.Path, ".js") {
+				entry += f.Body
 			}
 		}
 		if entry == "" {
-			t.Errorf("%s: no entrypoint file among its artifacts", name)
+			t.Errorf("%s: no source files among its artifacts", name)
 			continue
 		}
 		for _, want := range []string{"svc", "platform"} {
@@ -274,10 +278,13 @@ func TestDeployableRuntimesSetServiceDefaults(t *testing.T) {
 			continue
 		}
 
+		// Across every source file the runtime ships: the property is
+		// that the SERVICE does these things, not that one named file
+		// does.
 		var entry string
 		for _, f := range a.Files {
-			if f.Path == "main.go" || f.Path == "server.js" {
-				entry = f.Body
+			if strings.HasSuffix(f.Path, ".go") || strings.HasSuffix(f.Path, ".js") {
+				entry += f.Body
 			}
 		}
 
