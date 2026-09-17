@@ -10,7 +10,7 @@
 # Neither stage is pinned by digest. A floating tag means a base change
 # lands on the next build rather than when you choose it; pin both FROMs
 # to a digest if that matters more than picking up patch releases.
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
 COPY package*.json ./
@@ -23,7 +23,7 @@ COPY package*.json ./
 # missing file rather than an empty install.
 RUN npm ci --omit=dev && mkdir -p node_modules
 
-FROM gcr.io/distroless/nodejs22-debian12:nonroot
+FROM gcr.io/distroless/nodejs24-debian12:nonroot
 
 # Stamped into the image so every log line says which build produced it.
 # CI passes --build-arg VERSION=$GITHUB_SHA; a local build gets "dev".

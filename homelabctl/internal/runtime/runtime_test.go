@@ -304,3 +304,69 @@ func TestGoServiceSetsServerTimeouts(t *testing.T) {
 		}
 	}
 }
+
+// A scaffold inherits whatever the template pins, so a stale pin is a
+// stale starting point for every service created afterwards. These assert
+// the floor, not the ceiling: bump them when the template is bumped.
+func TestTemplatesPinSupportedVersions(t *testing.T) {
+	// The Node runtime and the Go directive across every artifact a
+	// runtime produces, keyed by what must appear.
+	wants := map[string][]string{
+		"go-service":   {"go 1.25", "client_golang v1.24"},
+		"go-cli":       {"go 1.25"},
+		"node-service": {"nodejs24", "node:24", "node-version: 24", "fastify", "prom-client"},
+	}
+
+	for name, want := range wants {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q) = %v", name, err)
+		}
+		a := r.Artifacts(Params{Name: "svc", Team: "t", Module: "example.com/svc", Port: 3000})
+
+		// Everything the runtime emits, so a version can be asserted
+		// wherever it lives - go.mod, Dockerfile or CI.
+		var all strings.Builder
+		for _, f := range a.Files {
+			all.WriteString(f.Body)
+		}
+		all.WriteString(a.Dockerfile)
+		all.WriteString(a.Workflow)
+
+		for _, w := range want {
+			if !strings.Contains(all.String(), w) {
+				t.Errorf("%s: no %q in its artifacts - a version pin was bumped in one place only", name, w)
+			}
+		}
+	}
+}
+
+// Both Go runtimes must agree on the toolchain: CI reads go-version-file,
+// so a split means two services built by different compilers.
+func TestGoRuntimesAgreeOnToolchain(t *testing.T) {
+	var seen string
+	for _, name := range []string{"go-service", "go-cli"} {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q) = %v", name, err)
+		}
+		for _, f := range r.Artifacts(Params{Name: "svc", Module: "example.com/svc", Port: 3000}).Files {
+			if f.Path != "go.mod" {
+				continue
+			}
+			for _, line := range strings.Split(f.Body, "\n") {
+				if !strings.HasPrefix(line, "go ") {
+					continue
+				}
+				if seen == "" {
+					seen = line
+				} else if line != seen {
+					t.Errorf("go runtimes disagree on toolchain: %q vs %q", seen, line)
+				}
+			}
+		}
+	}
+	if seen == "" {
+		t.Fatal("no go directive found in either Go runtime's go.mod")
+	}
+}
