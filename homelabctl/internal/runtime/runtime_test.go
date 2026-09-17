@@ -445,3 +445,46 @@ func TestGoServiceIsSpecFirst(t *testing.T) {
 		t.Error("CI does not check that generated code is current")
 	}
 }
+
+// The generated client supplies what ogen deliberately does not: a
+// timeout, a bounded retry, a circuit breaker, and the version header a
+// server uses to see who is still calling it.
+func TestGoServiceClientHasResilienceDefaults(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	a := r.Artifacts(Params{
+		Name: "svc", Team: "t", Module: "example.com/svc",
+		Port: 3000, SpecVersion: InitialSpecVersion,
+	})
+
+	var client string
+	for _, f := range a.Files {
+		if f.Path == "client.go" {
+			client = f.Body
+		}
+	}
+	if client == "" {
+		t.Fatal("go-service ships no client.go")
+	}
+
+	for _, want := range []string{
+		"X-Client-Version",          // who is calling
+		"SingleRetry",               // one retry, not five
+		"ExponentialRetry",          // the escape hatch
+		"NoRetry",                   // fail fast
+		"ErrCircuitOpen",            // stop calling something that is failing
+		"ht.Client = (*HTTPClient)", // compile-time proof it plugs into ogen
+	} {
+		if !strings.Contains(client, want) {
+			t.Errorf("client.go has no %s", want)
+		}
+	}
+
+	// The version the client reports must be the spec's, not a second
+	// number that drifts.
+	if !strings.Contains(client, `ClientVersion = "`+InitialSpecVersion+`"`) {
+		t.Error("client.go does not report the spec version")
+	}
+}

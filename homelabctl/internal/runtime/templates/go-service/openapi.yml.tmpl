@@ -5,7 +5,9 @@
 openapi: 3.0.3
 info:
   title: {{ .Name }}
-  version: 0.1.0
+  # Bump this when the API changes. The generated client reports it in
+  # X-Client-Version, so one version covers the API and its clients.
+  version: {{ .SpecVersion }}
   description: {{ .Name }}, owned by {{ .Team }}.
 
 paths:

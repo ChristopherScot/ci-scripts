@@ -17,13 +17,15 @@ func init() {
 			{"go", "mod", "tidy"},
 		},
 		files: map[string]string{
-			"go.mod.tmpl":       "go.mod",
-			"main.go.tmpl":      "main.go",
-			"main_test.go.tmpl": "main_test.go",
-			"openapi.yml.tmpl":  "openapi.yml",
-			"generate.go.tmpl":  "generate.go",
-			"gitignore":         ".gitignore",
-			"dockerignore":      ".dockerignore",
+			"go.mod.tmpl":         "go.mod",
+			"main.go.tmpl":        "main.go",
+			"main_test.go.tmpl":   "main_test.go",
+			"openapi.yml.tmpl":    "openapi.yml",
+			"generate.go.tmpl":    "generate.go",
+			"client.go.tmpl":      "client.go",
+			"client_test.go.tmpl": "client_test.go",
+			"gitignore":           ".gitignore",
+			"dockerignore":        ".dockerignore",
 		},
 	})
 

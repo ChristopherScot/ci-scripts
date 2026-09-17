@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -28,6 +29,9 @@ func checkSpec(dir string, add func(string, ...any)) {
 	}
 
 	var spec struct {
+		Info struct {
+			Version string `yaml:"version"`
+		} `yaml:"info"`
 		Paths map[string]map[string]struct {
 			OperationID string                    `yaml:"operationId"`
 			Summary     string                    `yaml:"summary"`
@@ -38,6 +42,11 @@ func checkSpec(dir string, add func(string, ...any)) {
 		add("%s is not valid YAML: %v", path, err)
 		return
 	}
+
+	// The client reports info.version in X-Client-Version. If the spec is
+	// bumped and the constant is not, that header lies - and it lies
+	// silently, which is worse than not sending it.
+	checkClientVersion(dir, spec.Info.Version, add)
 
 	seen := map[string]string{}
 	for route, methods := range spec.Paths {
@@ -71,5 +80,26 @@ func checkSpec(dir string, add func(string, ...any)) {
 				add("%s: no summary - the generated interface method will have no documentation", where)
 			}
 		}
+	}
+}
+
+// clientVersionConst matches the generated constant in client.go.
+var clientVersionConst = regexp.MustCompile(`ClientVersion\s*=\s*"([^"]*)"`)
+
+func checkClientVersion(dir, specVersion string, add func(string, ...any)) {
+	if specVersion == "" {
+		add("openapi.yml has no info.version - the client has no version to report")
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "client.go"))
+	if err != nil {
+		return // no generated client in this service
+	}
+	m := clientVersionConst.FindSubmatch(b)
+	if m == nil {
+		return
+	}
+	if got := string(m[1]); got != specVersion {
+		add("client.go reports ClientVersion %q but openapi.yml says %q - bump both, or X-Client-Version lies", got, specVersion)
 	}
 }

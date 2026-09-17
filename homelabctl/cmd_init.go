@@ -156,12 +156,13 @@ func tidy(dir string, cmds [][]string) error {
 // the monorepo layout is decided in one place.
 func artifactParams(o initOpts, c *config.Config) runtime.Params {
 	p := runtime.Params{
-		Name:   o.name,
-		Team:   c.Team,
-		Module: fmt.Sprintf("github.com/%s/%s", o.owner, o.name),
-		Owner:  o.owner,
-		Port:   o.port,
-		Image:  c.Image.Repository,
+		Name:        o.name,
+		Team:        c.Team,
+		SpecVersion: runtime.InitialSpecVersion,
+		Module:      fmt.Sprintf("github.com/%s/%s", o.owner, o.name),
+		Owner:       o.owner,
+		Port:        o.port,
+		Image:       c.Image.Repository,
 	}
 	if o.parentRepo != "" {
 		p.PathFilter = filepath.Join("services", o.name)

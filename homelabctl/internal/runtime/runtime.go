@@ -24,6 +24,11 @@ import (
 	"sort"
 )
 
+// InitialSpecVersion is where a new service's API starts. It reaches both
+// the spec's info.version and the client's ClientVersion, which must not
+// drift apart.
+const InitialSpecVersion = "0.1.0"
+
 // File is a file a scaffolded service starts with.
 type File struct {
 	Path string
@@ -35,11 +40,17 @@ type File struct {
 // runtime should not reach into the whole config, so that adding fields
 // there does not ripple into every language.
 type Params struct {
-	Name   string
-	Team   string // owning team, stamped onto every log line
-	Module string // import path / package name
-	Owner  string // GitHub owner, for a CLI's self-update endpoint
-	Port   int
+	Name string
+	Team string // owning team, stamped onto every log line
+
+	// SpecVersion is the API version from the spec's info.version. The
+	// generated client reports it in X-Client-Version, so a server can
+	// see which client versions still call it. One version for the API
+	// and its clients, rather than a second scheme to keep in sync.
+	SpecVersion string
+	Module      string // import path / package name
+	Owner       string // GitHub owner, for a CLI's self-update endpoint
+	Port        int
 
 	// Image is the registry path CI publishes to.
 	Image string

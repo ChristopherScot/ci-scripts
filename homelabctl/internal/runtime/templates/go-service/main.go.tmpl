@@ -3,11 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,11 +60,50 @@ func (service) GetRoot(context.Context) (*api.Identity, error) {
 
 // NewError renders a handler's error as the spec's Error schema, so a
 // failure is a documented response rather than an empty 500.
+//
+// It also logs it with a stack trace. ogen returns the error to the
+// caller but does not log it, so without this a 500 leaves nothing on the
+// server saying what happened - and the caller only sees the message.
 func (service) NewError(_ context.Context, err error) *api.ErrorStatusCode {
+	slog.Error("handler failed", "err", err, "stack", stack())
+
 	return &api.ErrorStatusCode{
 		StatusCode: http.StatusInternalServerError,
 		Response:   api.Error{Message: err.Error()},
 	}
+}
+
+// stack renders the call stack at the point the error was rendered.
+//
+// Note what this can and cannot tell you: ogen calls NewError AFTER the
+// handler has returned, so the frames here are the generated server's,
+// not the handler's. They identify the OPERATION that failed, which the
+// log line already names. To find the line that failed, wrap the error
+// where it is produced:
+//
+//	return nil, fmt.Errorf("fetching user %s: %w", id, err)
+//
+// Go's errors carry no stack of their own, and a dependency that adds one
+// still needs wrapping at every return to be useful.
+func stack() string {
+	pcs := make([]uintptr, 32)
+	// Skip runtime.Callers, stack, and NewError.
+	n := runtime.Callers(3, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+
+	var b strings.Builder
+	for {
+		f, more := frames.Next()
+		// Everything below the HTTP server is machinery, not this bug.
+		if strings.HasPrefix(f.Function, "net/http.") {
+			break
+		}
+		fmt.Fprintf(&b, "%s %s:%d\n", f.Function, path.Base(f.File), f.Line)
+		if !more {
+			break
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // observe logs and measures every request that reaches a known operation.
