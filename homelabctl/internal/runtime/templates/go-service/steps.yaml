@@ -8,5 +8,12 @@
 
       # CGO_ENABLED=0: a cgo binary links against glibc and will not run on
       # alpine, and that only shows up at container start.
+      #
+      # -X main.version stamps the commit into the binary, so every log
+      # line says which build produced it. Without it main.version stays
+      # "dev" and the field is worse than absent.
       - name: Build
-        run: CGO_ENABLED=0 go build -o bin/app .
+        run: |
+          CGO_ENABLED=0 go build \
+            -ldflags "-X main.version=$GITHUB_SHA" \
+            -o bin/app .

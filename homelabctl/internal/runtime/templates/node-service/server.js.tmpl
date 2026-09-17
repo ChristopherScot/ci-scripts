@@ -3,6 +3,26 @@ import { createServer } from 'node:http'
 const port = process.env.PORT || '{{ .Port }}'
 const started = Date.now()
 
+// Every line carries who emitted it. Alloy adds pod and namespace labels
+// in Loki, but a line copied into a ticket, an alert or a terminal arrives
+// without them - and "shutting down" from an unnamed service is not worth
+// much. VERSION is stamped by CI; it is "dev" for a local run.
+const logContext = {
+  service: '{{ .Name }}',
+  team: '{{ .Team }}',
+  version: process.env.VERSION || 'dev',
+}
+
+function log(msg, fields = {}) {
+  console.log(JSON.stringify({
+    time: new Date().toISOString(),
+    level: 'INFO',
+    msg,
+    ...logContext,
+    ...fields,
+  }))
+}
+
 // The deployment annotates this pod for scraping at /metrics. Without a
 // handler here Alloy would scrape the catch-all, get a 200, and fail to
 // parse the body - which reads as a data problem rather than a missing
@@ -34,13 +54,13 @@ const server = createServer((req, res) => {
 })
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(JSON.stringify({ msg: 'started', addr: ':' + port }))
+  log('started', { addr: ':' + port })
 })
 
 // Without this, SIGTERM kills in-flight requests on every deploy.
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
-    console.log(JSON.stringify({ msg: 'shutting down' }))
+    log('shutting down')
     server.close(() => process.exit(0))
   })
 }

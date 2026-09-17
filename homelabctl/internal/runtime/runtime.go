@@ -36,6 +36,7 @@ type File struct {
 // there does not ripple into every language.
 type Params struct {
 	Name   string
+	Team   string // owning team, stamped onto every log line
 	Module string // import path / package name
 	Owner  string // GitHub owner, for a CLI's self-update endpoint
 	Port   int

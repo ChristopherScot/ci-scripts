@@ -24,6 +24,11 @@ RUN npm ci --omit=dev && mkdir -p node_modules
 
 FROM gcr.io/distroless/nodejs22-debian12:nonroot
 
+# Stamped into the image so every log line says which build produced it.
+# CI passes --build-arg VERSION=$GITHUB_SHA; a local build gets "dev".
+ARG VERSION=dev
+ENV VERSION=$VERSION
+
 WORKDIR /app
 COPY --from=build --chown=65532:65532 /app/node_modules ./node_modules
 COPY --chown=65532:65532 . .

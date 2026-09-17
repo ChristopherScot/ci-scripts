@@ -155,6 +155,7 @@ func tidy(dir string, argv []string) error {
 func artifactParams(o initOpts, c *config.Config) runtime.Params {
 	p := runtime.Params{
 		Name:   o.name,
+		Team:   c.Team,
 		Module: fmt.Sprintf("github.com/%s/%s", o.owner, o.name),
 		Owner:  o.owner,
 		Port:   o.port,

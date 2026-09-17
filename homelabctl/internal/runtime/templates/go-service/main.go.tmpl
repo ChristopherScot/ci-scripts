@@ -14,12 +14,25 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// version is stamped by CI with -ldflags "-X main.version=...". The
+// fallback is what a local `go build` produces.
+var version = "dev"
+
 func healthz(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintln(w, "ok")
 }
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	// Every line carries who emitted it. Alloy adds pod and namespace
+	// labels in Loki, but a line copied into a ticket, an alert or a
+	// terminal arrives without them - and "shutting down" from an unnamed
+	// service is not worth much. version comes from CI (-ldflags), so a
+	// log line says which build produced it.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)).With(
+		"service", "{{ .Name }}",
+		"team", "{{ .Team }}",
+		"version", version,
+	))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)

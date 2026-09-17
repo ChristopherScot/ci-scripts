@@ -56,6 +56,9 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: {{ .Context }}
+          # Stamps the commit into the image so log lines name their build.
+          build-args: |
+            VERSION=${{ "{{" }} github.sha {{ "}}" }}
           push: ${{ "{{" }} github.event_name != 'pull_request' {{ "}}" }}
           tags: ${{ "{{" }} steps.meta.outputs.tags {{ "}}" }}
           labels: ${{ "{{" }} steps.meta.outputs.labels {{ "}}" }}

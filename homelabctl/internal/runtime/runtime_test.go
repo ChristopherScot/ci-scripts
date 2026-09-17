@@ -201,3 +201,38 @@ func TestRuntimesDeclareDependencyResolution(t *testing.T) {
 		}
 	}
 }
+
+// A log line that does not say which service emitted it is worth little
+// outside its Loki label context - in a ticket, an alert, or a terminal.
+// A deployable runtime must stamp its identity onto the default logger.
+func TestDeployableRuntimesStampLogContext(t *testing.T) {
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q) = %v", name, err)
+		}
+		a := r.Artifacts(Params{
+			Name: "svc", Team: "platform",
+			Module: "example.com/svc", Port: 3000,
+		})
+		if !a.Deployable {
+			continue // a CLI writes to a terminal, not an aggregator
+		}
+
+		var entry string
+		for _, f := range a.Files {
+			if f.Path == "main.go" || f.Path == "server.js" {
+				entry = f.Body
+			}
+		}
+		if entry == "" {
+			t.Errorf("%s: no entrypoint file among its artifacts", name)
+			continue
+		}
+		for _, want := range []string{"svc", "platform"} {
+			if !strings.Contains(entry, want) {
+				t.Errorf("%s: entrypoint does not carry %q in its log context", name, want)
+			}
+		}
+	}
+}
