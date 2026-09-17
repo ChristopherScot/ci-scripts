@@ -199,9 +199,9 @@ func TestRuntimesDeclareDependencyResolution(t *testing.T) {
 			if f.Path == "package.json" && name == "go-service" {
 				continue
 			}
-			cmds := r.ResolveDeps()
+			cmds := r.Lock()
 			if len(cmds) == 0 {
-				t.Errorf("%s generates %s but declares no ResolveDeps; its scaffold will not build",
+				t.Errorf("%s generates %s but declares no Lock command; its scaffold will not build",
 					name, f.Path)
 				continue
 			}
@@ -446,25 +446,29 @@ func TestGoServiceIsSpecFirst(t *testing.T) {
 		t.Errorf("generate.go does not invoke ogen:\n%s", gen)
 	}
 
-	// init runs Generate before ResolveDeps, and must: api/ does not
-	// exist until ogen has run, so `go get` would fail on the import.
-	var order []string
-	for _, cmd := range append(r.Generate(), r.ResolveDeps()...) {
-		order = append(order, strings.Join(cmd, " "))
+	// init runs Generate before Lock, and must: api/ does not exist until
+	// ogen has run, so resolving imports would fail.
+	if len(r.Generate()) == 0 {
+		t.Error("go-service generates nothing, so the spec derives no code")
 	}
-	joined := strings.Join(order, " | ")
-	genAt, tidyAt := strings.Index(joined, "generate"), strings.Index(joined, "tidy")
-	if genAt < 0 || tidyAt < 0 || genAt > tidyAt {
-		t.Errorf("generation must precede tidy, got: %v", order)
+	if len(r.Lock()) == 0 {
+		t.Error("go-service locks nothing, so a scaffold has no go.sum")
 	}
 
-	// Regenerating must be deterministic: `regen` runs Generate and CI
-	// diffs the result, so a command whose output depends on the day
-	// would be a red build nobody caused.
-	for _, cmd := range r.Generate() {
-		if strings.Contains(strings.Join(cmd, " "), "-u") {
-			t.Errorf("Generate runs an upgrading command, which belongs in ResolveDeps: %v", cmd)
+	// regen runs Generate and Lock and CI diffs the result, so neither
+	// may depend on what the world published today. Only Upgrade may.
+	for phase, cmds := range map[string][][]string{
+		"Generate": r.Generate(),
+		"Lock":     r.Lock(),
+	} {
+		for _, cmd := range cmds {
+			if strings.Contains(strings.Join(cmd, " "), " -u") {
+				t.Errorf("%s runs an upgrading command, which belongs in Upgrade: %v", phase, cmd)
+			}
 		}
+	}
+	if len(r.Upgrade()) == 0 {
+		t.Error("go-service never upgrades, so a new service starts on stale transitive versions")
 	}
 
 	// CI must reject a spec that was changed without regenerating.

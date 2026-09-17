@@ -29,12 +29,14 @@ type embedded struct {
 	deployable bool
 	hardened   bool
 
-	// generate rebuilds what the service's own sources derive; must be
-	// deterministic, since CI diffs the result.
+	// generate rebuilds what the service's own sources derive.
 	generate [][]string
 
-	// resolve are the dependency-locking commands, run once by init.
-	resolve [][]string
+	// lock pins declared dependencies; deterministic, so regen runs it.
+	lock [][]string
+
+	// upgrade moves dependencies forward; init only.
+	upgrade [][]string
 
 	// files maps a template file to the path it is written to in the
 	// generated service. A .tmpl suffix means it is rendered with Params;
@@ -42,10 +44,11 @@ type embedded struct {
 	files map[string]string
 }
 
-func (e embedded) Name() string            { return e.name }
-func (e embedded) SupportsHardened() bool  { return e.hardened }
-func (e embedded) Generate() [][]string    { return e.generate }
-func (e embedded) ResolveDeps() [][]string { return e.resolve }
+func (e embedded) Name() string           { return e.name }
+func (e embedded) SupportsHardened() bool { return e.hardened }
+func (e embedded) Generate() [][]string   { return e.generate }
+func (e embedded) Lock() [][]string       { return e.lock }
+func (e embedded) Upgrade() [][]string    { return e.upgrade }
 
 func (e embedded) read(name string) string {
 	b, err := templates.ReadFile(path.Join("templates", e.dir, name))

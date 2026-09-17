@@ -77,11 +77,12 @@ func runRegen(cfgPath string, checkOnly bool) error {
 		return fmt.Errorf("%d file(s) out of date - run `homelabctl regen`", len(stale))
 	}
 
-	// Generate only, never ResolveDeps: regenerating must be
-	// deterministic. `go get -u` belongs to creating a service, and
-	// running it here would mean CI - which runs this and diffs - failed
-	// on any day a dependency published.
-	if err := tidy(dir, r.Generate()); err != nil {
+	// Generate and Lock, never Upgrade. Both are deterministic - the
+	// same spec and the same manifest give the same output - which is
+	// what lets CI run this and fail on a diff. Upgrade belongs to
+	// creating a service; running it here would be a red build on any
+	// day a dependency published.
+	if err := run(dir, r.Generate(), r.Lock()); err != nil {
 		return err
 	}
 	for _, s := range stale {

@@ -138,15 +138,18 @@ func runInit(o initOpts) error {
 // tidy runs the runtime's dependency-resolution command in the new
 // service directory. What to run is the runtime's business, declared in
 // registered.go; this only knows how to run it.
-func tidy(dir string, cmds [][]string) error {
-	for _, argv := range cmds {
-		if len(argv) == 0 {
-			continue
-		}
-		cmd := exec.Command(argv[0], argv[1:]...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("%s in %s: %w\n%s", strings.Join(cmd.Args, " "), dir, err, out)
+// run executes each group of commands in order, in dir.
+func run(dir string, groups ...[][]string) error {
+	for _, cmds := range groups {
+		for _, argv := range cmds {
+			if len(argv) == 0 {
+				continue
+			}
+			cmd := exec.Command(argv[0], argv[1:]...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("%s in %s: %w\n%s", strings.Join(cmd.Args, " "), dir, err, out)
+			}
 		}
 	}
 	return nil
@@ -362,7 +365,9 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	// so a template that declares any dependency is dead on arrival.
 	if o.skipTidy {
 		// nothing to resolve
-	} else if err := tidy(dir, append(r.Generate(), r.ResolveDeps()...)); err != nil {
+		// Generate first - a lockfile cannot resolve an import that does
+		// not exist yet - then upgrade, then lock what that settled on.
+	} else if err := run(dir, r.Generate(), r.Upgrade(), r.Lock()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 

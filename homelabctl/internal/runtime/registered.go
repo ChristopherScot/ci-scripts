@@ -17,15 +17,12 @@ func init() {
 			// dependencies, which stay current.
 			{"npx", "--yes", "openapi-typescript@7", "openapi.yml", "-o", "clients/ts/schema.d.ts"},
 		},
-		// Run once, by init. `go get -u` starts a new service on current
-		// transitive versions - tidy alone resolves to the minimums each
-		// dependency declares, which are older than what is released.
-		// Without tidy there is no go.sum and the service does not build
-		// at all.
-		resolve: [][]string{
-			{"go", "get", "-u", "./..."},
-			{"go", "mod", "tidy"},
-		},
+		// Without go.sum the service does not build at all.
+		lock: [][]string{{"go", "mod", "tidy"}},
+		// A new service starts on current transitive versions; tidy alone
+		// resolves to the minimums each dependency declares, which are
+		// older than what is released.
+		upgrade: [][]string{{"go", "get", "-u", "./..."}},
 		files: map[string]string{
 			"go.mod.tmpl":         "go.mod",
 			"main.go.tmpl":        "main.go",
@@ -53,10 +50,8 @@ func init() {
 	// self-update command homelabctl uses.
 	Register(embedded{
 		name: "go-cli", dir: "go-cli", deployable: false, hardened: false,
-		resolve: [][]string{
-			{"go", "get", "-u", "./..."},
-			{"go", "mod", "tidy"},
-		},
+		lock:    [][]string{{"go", "mod", "tidy"}},
+		upgrade: [][]string{{"go", "get", "-u", "./..."}},
 		files: map[string]string{
 			"go.mod.tmpl":        "go.mod",
 			"main.go.tmpl":       "main.go",
@@ -72,8 +67,9 @@ func init() {
 		name: "node-service", dir: "node-service", deployable: true, hardened: true,
 		// Generates package-lock.json, which the Dockerfile's `npm ci`
 		// requires and which is not otherwise created.
-		// npm resolves ^ ranges to the newest matching release already.
-		resolve: [][]string{{"npm", "install", "--package-lock-only"}},
+		// npm resolves ^ ranges to the newest matching release already,
+		// so locking and upgrading are the same command here.
+		lock: [][]string{{"npm", "install", "--package-lock-only"}},
 		files: map[string]string{
 			"package.json.tmpl":   "package.json",
 			"server.js.tmpl":      "server.js",

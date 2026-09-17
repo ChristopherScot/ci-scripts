@@ -114,24 +114,14 @@ type Runtime interface {
 	// non-root with a read-only root filesystem.
 	SupportsHardened() bool
 
-	// Generate are the commands that rebuild everything derived from the
-	// service's own sources - its OpenAPI spec, say. Run in order, in the
-	// service directory. Nil if a runtime generates nothing.
-	//
-	// These must be DETERMINISTIC: `regen` runs them, and CI runs `regen`
-	// and fails on a diff. A command whose output depends on the day
-	// would turn that into a red build nobody caused.
+	// Generate rebuilds what the service's own sources derive - code
+	// generated from its OpenAPI spec, say. Run in order, in the service
+	// directory. Nil if a runtime generates nothing.
 	Generate() [][]string
 
-	// ResolveDeps are the commands that turn a declared dependency list
-	// into a locked one. Run once by `init`, after Generate.
-	//
-	// These may be non-deterministic, and one of them is: a new Go
-	// service runs `go get -u` so it starts on current transitive
-	// versions rather than the minimums its direct dependency declares,
-	// which are typically months old. That is right when creating a
-	// service and wrong afterwards, which is why it is separate from
-	// Generate.
+	// Lock resolves declared dependencies into a lockfile: `go mod tidy`,
+	// `npm install --package-lock-only`. It reads what the manifest
+	// already says and pins it, so running it twice changes nothing.
 	//
 	// It belongs here rather than in a switch at the call site because it
 	// is the one build concern that cannot be expressed as a template.
@@ -139,7 +129,18 @@ type Runtime interface {
 	// name, so a language whose name did not start with one of those got
 	// no lockfile and no warning - and a Go service without go.sum does
 	// not build at all.
-	ResolveDeps() [][]string
+	Lock() [][]string
+
+	// Upgrade moves dependencies to newer versions: `go get -u`. Unlike
+	// Generate and Lock, its output depends on what the world has
+	// published, so the same inputs give different results on different
+	// days.
+	//
+	// Run once, by init, so a new service starts on current transitive
+	// versions rather than the minimums its direct dependency declares -
+	// typically months old. Never by regen, which CI runs and diffs: an
+	// upgrade there would be a red build nobody caused.
+	Upgrade() [][]string
 }
 
 var registry = map[string]Runtime{}
