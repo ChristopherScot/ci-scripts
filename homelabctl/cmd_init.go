@@ -295,13 +295,13 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	a := r.Artifacts(artifactParams(o, c))
 
 	var written, skipped []string
-	put := func(path, body string, mode uint32) error {
+	put := func(path, body string) error {
 		full := filepath.Join(dir, path)
 		if _, err := os.Stat(full); err == nil {
 			skipped = append(skipped, path)
 			return nil
 		}
-		if err := writeFile(full, body, mode); err != nil {
+		if err := writeFile(full, body); err != nil {
 			return err
 		}
 		written = append(written, path)
@@ -309,24 +309,24 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	}
 
 	for _, f := range a.Files {
-		if err := put(f.Path, f.Body, f.Mode); err != nil {
+		if err := put(f.Path, f.Body); err != nil {
 			return err
 		}
 	}
 	// Nothing here asks what kind of runtime this is - a CLI simply has no
 	// Dockerfile and is not Deployable.
 	if a.Dockerfile != "" {
-		if err := put("Dockerfile", a.Dockerfile, 0); err != nil {
+		if err := put("Dockerfile", a.Dockerfile); err != nil {
 			return err
 		}
 	}
 	if a.Deployable {
-		if err := put("config.yaml", configYAML(c), 0); err != nil {
+		if err := put("config.yaml", configYAML(c)); err != nil {
 			return err
 		}
 		// Editors validate against this as you type, which is what turns a
 		// silently-ignored typo like `hardend:` into a visible squiggle.
-		if err := put("config.schema.json", config.Schema, 0); err != nil {
+		if err := put("config.schema.json", config.Schema); err != nil {
 			return err
 		}
 		// Manifests are generated rather than copied, so they reflect
@@ -337,7 +337,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 			return err
 		}
 		for _, out := range manifests {
-			if err := put(filepath.Join("deploy", out.Path), out.Body, 0); err != nil {
+			if err := put(filepath.Join("deploy", out.Path), out.Body); err != nil {
 				return err
 			}
 		}
@@ -348,14 +348,14 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// only rebuilds what changed.
 		wfPath = filepath.Join("..", "..", ".github", "workflows", o.name+".yaml")
 	}
-	if err := put(wfPath, a.Workflow, 0); err != nil {
+	if err := put(wfPath, a.Workflow); err != nil {
 		return err
 	}
 
 	if a.Deployable {
 		appPath := filepath.Join(dir, "deploy", "_argocd-application.yaml")
 		appRepo := "https://github.com/" + o.owner + "/homelab"
-		if err := writeFile(appPath, render.Application(c, appRepo, o.name), 0); err != nil {
+		if err := writeFile(appPath, render.Application(c, appRepo, o.name)); err != nil {
 			return err
 		}
 	}
@@ -428,14 +428,15 @@ func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 	}
 }
 
-func writeFile(path, body string, mode uint32) error {
+// writeFile creates a scaffolded file. Everything scaffolded is source,
+// config or CI YAML, so they are all 0644 - a CLI's binary is produced by
+// `go build`, not written here, and its self-update opens the replacement
+// 0755 itself.
+func writeFile(path, body string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if mode == 0 {
-		mode = 0o644
-	}
-	return os.WriteFile(path, []byte(body), os.FileMode(mode))
+	return os.WriteFile(path, []byte(body), 0o644)
 }
 
 func configYAML(c *config.Config) string {

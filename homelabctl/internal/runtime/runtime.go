@@ -33,7 +33,6 @@ const InitialSpecVersion = "0.1.0"
 type File struct {
 	Path string
 	Body string
-	Mode uint32 // 0 means 0644
 }
 
 // Params are the config values a runtime needs. Deliberately narrow: a
