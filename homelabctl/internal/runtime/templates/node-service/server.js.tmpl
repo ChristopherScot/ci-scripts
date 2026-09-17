@@ -1,117 +1,121 @@
-import { createServer } from 'node:http'
-import pino from 'pino'
+import Fastify, { LogController } from 'fastify'
+import { collectDefaultMetrics, Counter, Histogram, register } from 'prom-client'
 
-const port = process.env.PORT || '{{ .Port }}'
-const started = Date.now()
+const port = Number(process.env.PORT || '{{ .Port }}')
 
-// Configured to match what go-service's slog emits, so one Loki query
-// works against either runtime: an ISO-8601 `time`, an uppercase `level`
-// name rather than pino's numeric default, and `msg`. Without these
-// formatters the two runtimes describe the same events differently.
+// Matches what go-service's slog emits, so one Loki query works against
+// either runtime: an ISO-8601 `time`, an uppercase `level` name rather
+// than pino's numeric default, and `msg`.
 //
 // The bindings put service, team and version on every line. Alloy adds
 // pod and namespace labels in Loki, but a line copied into a ticket, an
 // alert or a terminal arrives without them - and "shutting down" from an
 // unnamed service is not worth much. VERSION is stamped by CI; it is
 // "dev" for a local run.
-const log = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  base: {
-    service: '{{ .Name }}',
-    team: '{{ .Team }}',
-    version: process.env.VERSION || 'dev',
+const app = Fastify({
+  logger: {
+    level: process.env.LOG_LEVEL || 'info',
+    base: {
+      service: '{{ .Name }}',
+      team: '{{ .Team }}',
+      version: process.env.VERSION || 'dev',
+    },
+    timestamp: () => `,"time":"${new Date().toISOString()}"`,
+    formatters: {
+      level: (label) => ({ level: label.toUpperCase() }),
+    },
+    // Fastify's own listening lines are silenced by returning an empty
+    // message from listenTextResolver; drop those here so they do not
+    // appear as blank entries.
+    hooks: {
+      logMethod(args, method) {
+        if (args[0] === '') return
+        return method.apply(this, args)
+      },
+    },
   },
-  timestamp: () => `,"time":"${new Date().toISOString()}"`,
-  formatters: {
-    level: (label) => ({ level: label.toUpperCase() }),
-  },
+  // Fastify's own per-request lines duplicate the one the onResponse hook
+  // below emits, and they log the raw url. The top-level
+  // disableRequestLogging is deprecated in Fastify 5 and goes away in 6,
+  // so this goes through a LogController instance instead.
+  logController: new LogController({ disableRequestLogging: true }),
 })
 
-// The deployment annotates this pod for scraping at /metrics. Without a
-// handler here Alloy would scrape the catch-all, get a 200, and fail to
-// parse the body - which reads as a data problem rather than a missing
-// endpoint. Minimal exposition rather than a dependency; swap in prom-client
-// when this service has metrics worth naming.
-// Request counts, keyed by the ROUTE this server recognises rather than
-// the raw URL. There is no router here to report a matched pattern, so
-// anything unrecognised is counted as "other": a label per distinct URL
-// would give Prometheus unbounded cardinality, and a URL can carry a
-// token or an id that must not reach a label or a log line.
-const counts = new Map()
+// Default process and heap metrics, the Node equivalent of what the Go
+// client registers for free.
+collectDefaultMetrics()
 
-function count(route, method, status) {
-  const key = `${route}|${method}|${status}`
-  counts.set(key, (counts.get(key) || 0) + 1)
-}
-
-function metrics() {
-  const up = Math.floor((Date.now() - started) / 1000)
-  const lines = [
-    '# HELP process_uptime_seconds Seconds since process start.',
-    '# TYPE process_uptime_seconds gauge',
-    `process_uptime_seconds ${up}`,
-    '# HELP nodejs_heap_used_bytes Heap in use.',
-    '# TYPE nodejs_heap_used_bytes gauge',
-    `nodejs_heap_used_bytes ${process.memoryUsage().heapUsed}`,
-    '# HELP http_requests_total Requests by route, method and status.',
-    '# TYPE http_requests_total counter',
-  ]
-  for (const [key, n] of counts) {
-    const [route, method, status] = key.split('|')
-    lines.push(`http_requests_total{route="${route}",method="${method}",status="${status}"} ${n}`)
-  }
-  lines.push('')
-  return lines.join('\n')
-}
-
-// Routes this server answers. Matching against a known set is what keeps
-// an arbitrary URL out of the logs and metrics below.
-const ROUTES = new Set(['/', '/healthz', '/metrics'])
-
-const server = createServer((req, res) => {
-  const start = process.hrtime.bigint()
-  // Strip the query string before matching: it is not part of the route
-  // and routinely carries values that should not be logged.
-  const path = (req.url || '/').split('?')[0]
-  const route = ROUTES.has(path) ? path : 'other'
-
-  res.on('finish', () => {
-    // Alloy scrapes /metrics every 15s and the kubelet probes /healthz as
-    // often; logging those buries real traffic and inflates the counters
-    // with self-observation.
-    if (path === '/metrics' || path === '/healthz') return
-
-    const ms = Number(process.hrtime.bigint() - start) / 1e6
-    count(route, req.method, res.statusCode)
-    log.info(
-      { method: req.method, route, status: res.statusCode, duration_ms: Math.round(ms) },
-      'request',
-    )
-  })
-
-  if (path === '/healthz') {
-    res.writeHead(200).end('ok\n')
-    return
-  }
-  if (path === '/metrics') {
-    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' }).end(metrics())
-    return
-  }
-  if (path !== '/') {
-    res.writeHead(404).end('not found\n')
-    return
-  }
-  res.writeHead(200).end('{{ .Name }}\n')
+const requests = new Counter({
+  name: 'http_requests_total',
+  help: 'Requests by route, method and status.',
+  labelNames: ['route', 'method', 'status'],
 })
 
-server.listen(port, '0.0.0.0', () => {
-  log.info({ addr: ':' + port }, 'started')
+const latency = new Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Request latency by route and method.',
+  labelNames: ['route', 'method'],
 })
+
+// Log and measure every request.
+//
+// The route label is the matched ROUTE PATTERN, never the raw url: a path
+// can carry a token or an id, and this reaches both the log aggregator
+// and a metric label. A label per distinct URL would also give Prometheus
+// unbounded cardinality. Unrouted requests report "other" rather than
+// their path, for the same reason.
+app.addHook('onResponse', (request, reply, done) => {
+  const route = request.routeOptions?.url ?? 'other'
+
+  // Alloy scrapes /metrics every 15s and the kubelet probes /healthz as
+  // often; logging those buries real traffic and inflates the counters
+  // with self-observation.
+  if (route !== '/metrics' && route !== '/healthz') {
+    const seconds = reply.elapsedTime / 1000
+    requests.inc({ route, method: request.method, status: reply.statusCode })
+    latency.observe({ route, method: request.method }, seconds)
+    request.log.info({
+      method: request.method,
+      route,
+      status: reply.statusCode,
+      duration_ms: Math.round(reply.elapsedTime),
+    }, 'request')
+  }
+  done()
+})
+
+app.get('/healthz', async (_request, reply) => reply.type('text/plain').send('ok\n'))
+
+// The deployment annotates this pod for scraping here. Without this route
+// Alloy would scrape the 404 handler and fail to parse the body - which
+// reads as a data problem rather than a missing endpoint.
+app.get('/metrics', async (_request, reply) =>
+  reply.type(register.contentType).send(await register.metrics()))
+
+app.get('/', async (_request, reply) => reply.type('text/plain').send('{{ .Name }}\n'))
 
 // Without this, SIGTERM kills in-flight requests on every deploy.
+// Kubernetes sends SIGTERM, waits terminationGracePeriodSeconds, then
+// SIGKILLs; draining inside that window is what makes a rollout invisible
+// to callers.
 for (const sig of ['SIGTERM', 'SIGINT']) {
-  process.on(sig, () => {
-    log.info('shutting down')
-    server.close(() => process.exit(0))
+  process.on(sig, async () => {
+    app.log.info('shutting down')
+    await app.close()
+    process.exit(0)
   })
+}
+
+try {
+  // Fastify logs a listening line itself, unconditionally and once per
+  // bound address - `0.0.0.0` expands to every interface, so that is two
+  // lines in a container and more on a laptop, each carrying a LAN or VPN
+  // address. There is no option to turn it off, so the resolver returns
+  // the empty string and the logger drops empty messages, leaving the one
+  // line below.
+  await app.listen({ port, host: '0.0.0.0', listenTextResolver: () => '' })
+  app.log.info({ addr: ':' + port }, 'started')
+} catch (err) {
+  app.log.error({ err }, 'server stopped')
+  process.exit(1)
 }
