@@ -6,8 +6,17 @@
 // Application, the image-updater annotations, CI) is identical regardless
 // of language and lives in the render package.
 //
-// Adding Node means implementing this interface and calling Register in an
-// init function. No existing code changes.
+// Adding a language is normally NO Go code: a directory under templates/
+// holding its Dockerfile, steps.yaml, workflow.yaml and starter files,
+// plus one embedded{...} entry in registered.go. All three shipped
+// runtimes are exactly that.
+//
+// The Runtime interface exists for the runtime that eventually needs more
+// than data - one whose build steps depend on inspecting a lockfile, say.
+// That one can be its own type and Register itself, instead of becoming a
+// special case inside embedded. Note embedded's fields are unexported and
+// this package is internal, so implementing Runtime means adding a type
+// HERE, not from another module.
 package runtime
 
 import (
@@ -73,6 +82,10 @@ type Artifacts struct {
 }
 
 // Runtime describes how to build one kind of thing in one language.
+//
+// Every runtime that ships today is an embedded{} - a data declaration
+// over a template directory. The interface is the seam for the first one
+// that is not.
 type Runtime interface {
 	// Name is the value used in config.yaml's `runtime:` field, e.g.
 	// go-service, node-service, go-cli.

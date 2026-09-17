@@ -29,13 +29,10 @@ Secrets. One place to rotate.
 
 ## Adding a runtime
 
-Implement `runtime.Runtime` and call `Register` from an `init`. Nothing
-else changes — manifests, the Argo Application, the image-updater
-annotations and CI are identical across languages.
-
 A runtime is usually **no Go code at all**: a directory of template files
 under `internal/runtime/templates/<name>/`, plus one entry in
-`registered.go`.
+`registered.go`. Nothing else changes — manifests, the Argo Application,
+the image-updater annotations and CI are identical across languages.
 
 ```go
 Register(embedded{
@@ -49,8 +46,14 @@ Register(embedded{
 ```
 
 The directory supplies `Dockerfile`, `steps.yaml` (the CI build steps) and
-`workflow.yaml`, each rendered with the service's `Params`. Write Go only
-if a runtime needs behaviour the templates cannot express.
+`workflow.yaml`, each rendered with the service's `Params`.
+
+Write Go only if a runtime needs behaviour the templates cannot express —
+build steps that inspect a lockfile, say. Then implement `runtime.Runtime`
+and `Register` it, rather than adding a special case to `embedded`. That
+type lives in `internal/runtime` alongside the others: the package is
+internal and `embedded`'s fields are unexported, so a runtime cannot be
+added from outside this module.
 
 Three ship today:
 
