@@ -27,7 +27,7 @@ func rootCmd() *cobra.Command {
 		// this every failure appears twice.
 		SilenceErrors: true,
 	}
-	root.AddCommand(initCmd(), renderCmd(), diffCmd(), checkCmd(), vaultCmd(), updateCmd(), versionCmd())
+	root.AddCommand(initCmd(), renderCmd(), regenCmd(), diffCmd(), checkCmd(), vaultCmd(), updateCmd(), versionCmd())
 
 	// Cobra builds its own `completion` command during Execute, so it does
 	// not exist yet here and cannot be extended in place. Force it to be

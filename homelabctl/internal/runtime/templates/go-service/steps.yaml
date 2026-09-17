@@ -3,24 +3,20 @@
           go-version-file: go.mod
           cache: true
 
-      # The spec is the source of truth, so what is committed must match
-      # what it generates. Without this a spec change can merge with
-      # stale code and the API silently diverges from its documentation.
+      # openapi.yml is the source of truth, so everything derived from
+      # it - the server interface, both clients, the versions they report
+      # - must match what is committed. Otherwise a spec change merges
+      # with stale code and the API quietly diverges from its own
+      # documentation.
+      #
+      # This regenerates and diffs rather than trusting anyone to have
+      # run the right commands in the right order.
       - name: Check generated code is current
         run: |
           go generate ./...
-          git diff --exit-code -- api/ \
-            || { echo "::error::api/ is stale - run 'go generate ./...' and commit"; exit 1; }
-
-      # The TypeScript client's types come from the same spec, so they go
-      # stale the same way. Pinned to openapi-typescript 7, which
-      # requires TypeScript ^5 and breaks on 7 - npx keeps that
-      # constraint out of any consuming project's dependencies.
-      - name: Check the TypeScript client is current
-        run: |
           npx --yes openapi-typescript@7 openapi.yml -o clients/ts/schema.d.ts
-          git diff --exit-code -- clients/ts/schema.d.ts \
-            || { echo "::error::clients/ts/schema.d.ts is stale - run npm run generate:ts and commit"; exit 1; }
+          git diff --exit-code -- api/ clients/ts/schema.d.ts \
+            || { echo "::error::generated code is stale - run 'homelabctl regen' and commit"; exit 1; }
 
       - name: Test
         run: go test -race ./...

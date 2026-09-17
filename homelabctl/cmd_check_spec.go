@@ -98,7 +98,7 @@ func checkClientVersion(dir, specVersion string, add func(string, ...any)) {
 	}
 	if m := clientVersionConst.FindSubmatch(b); m != nil {
 		if got := string(m[1]); got != specVersion {
-			add("api/client.go reports ClientVersion %q but openapi.yml says %q - bump both, or X-Client-Version lies", got, specVersion)
+			add("api/client.go reports ClientVersion %q but openapi.yml says %q - run `homelabctl regen`; otherwise X-Client-Version lies", got, specVersion)
 		}
 	}
 
@@ -122,6 +122,6 @@ func checkTSClientVersion(dir, specVersion string, add func(string, ...any)) {
 		return
 	}
 	if pkg.Version != specVersion {
-		add("package.json is version %q but openapi.yml says %q - consumers would install a version the API does not claim", pkg.Version, specVersion)
+		add("package.json is version %q but openapi.yml says %q - run `homelabctl regen`; otherwise consumers install a version the API does not claim", pkg.Version, specVersion)
 	}
 }
