@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -17,7 +16,6 @@ import (
 // Abbreviated SHAs are the mistake this catches: they look like valid tags
 // and fail only at pull time, as ImagePullBackOff with the app still
 // showing Synced.
-var shortSHA = regexp.MustCompile(`:[0-9a-f]{7,12}$`)
 
 // errAbbreviatedSHA is a sentinel so callers and tests can recognise this
 // without matching on the message text.
@@ -67,7 +65,7 @@ func renderCmd() *cobra.Command {
 }
 
 func runRender(o renderOpts) error {
-	if shortSHA.MatchString(o.imageRef) {
+	if config.IsAbbreviatedSHA(o.imageRef) {
 		return fmt.Errorf("%q: %w", o.imageRef, errAbbreviatedSHA)
 	}
 

@@ -7,14 +7,12 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
-var (
-	shortTagInManifest = regexp.MustCompile(`image:\s*\S+:[0-9a-f]{7,12}\s*$`)
-	changeme           = regexp.MustCompile(`CHANGEME`)
-)
+var changeme = regexp.MustCompile(`CHANGEME`)
 
 // runCheck turns the deploy failures that are otherwise silent into a red
 // build. Each of these presented as Synced/Healthy with nothing shipping.
@@ -84,7 +82,7 @@ func runCheck(dir string) error {
 			if changeme.MatchString(line) {
 				add("%s:%d still contains a CHANGEME placeholder", p, i+1)
 			}
-			if shortTagInManifest.MatchString(line) && !strings.Contains(line, "@sha256:") {
+			if ref, ok := config.ImageRefInLine(line); ok && config.IsAbbreviatedSHA(ref) {
 				add("%s:%d image tag looks like an abbreviated SHA; registry tags are full 40-char SHAs", p, i+1)
 			}
 		}

@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -84,44 +82,22 @@ func checkSpec(dir string, add func(string, ...any)) {
 	}
 }
 
-// clientVersionConst matches the generated constant in client.go.
-var clientVersionConst = regexp.MustCompile(`ClientVersion\s*=\s*"([^"]*)"`)
-
+// checkClientVersion reports clients whose version has fallen behind the
+// spec's. It asks regen what is stale rather than re-deriving it: regen
+// is what fixes this, and two implementations of "which files carry the
+// version" would drift exactly the way the versions themselves do.
 func checkClientVersion(dir, specVersion string, add func(string, ...any)) {
 	if specVersion == "" {
 		add("openapi.yml has no info.version - the client has no version to report")
 		return
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "api", "client.go"))
+	stale, err := syncVersions(dir, specVersion, true)
 	if err != nil {
-		return // no generated client in this service
-	}
-	if m := clientVersionConst.FindSubmatch(b); m != nil {
-		if got := string(m[1]); got != specVersion {
-			add("api/client.go reports ClientVersion %q but openapi.yml says %q - run `homelabctl regen`; otherwise X-Client-Version lies", got, specVersion)
-		}
-	}
-
-	// The TypeScript client carries the same version twice: the package
-	// version consumers install, and the constant it reports.
-	checkTSClientVersion(dir, specVersion, add)
-}
-
-func checkTSClientVersion(dir, specVersion string, add func(string, ...any)) {
-	// clients/ts/index.js reads its version from package.json, so there
-	// is nothing to drift there - only package.json itself is written by
-	// hand, and it is what a consumer installs.
-	b, err := os.ReadFile(filepath.Join(dir, "package.json"))
-	if err != nil {
+		add("checking client versions: %v", err)
 		return
 	}
-	var pkg struct {
-		Version string `json:"version"`
-	}
-	if json.Unmarshal(b, &pkg) != nil || pkg.Version == "" {
-		return
-	}
-	if pkg.Version != specVersion {
-		add("package.json is version %q but openapi.yml says %q - run `homelabctl regen`; otherwise consumers install a version the API does not claim", pkg.Version, specVersion)
+	for _, f := range stale {
+		add("%s does not report version %q - run `homelabctl regen`; otherwise X-Client-Version lies and consumers install a version the API does not claim",
+			f, specVersion)
 	}
 }
