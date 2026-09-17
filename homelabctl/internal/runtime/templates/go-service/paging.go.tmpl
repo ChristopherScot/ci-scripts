@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 // including ones added later.
 //
 //	for user, err := range Paged(ctx, func(ctx context.Context, cursor string) (Page[User], error) {
-//	    res, err := c.ListUsers(ctx, api.ListUsersParams{After: cursor})
+//	    res, err := c.ListUsers(ctx, ListUsersParams{After: cursor})
 //	    if err != nil {
 //	        return Page[User]{}, err
 //	    }

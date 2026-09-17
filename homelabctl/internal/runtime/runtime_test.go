@@ -461,7 +461,7 @@ func TestGoServiceClientHasResilienceDefaults(t *testing.T) {
 
 	var client string
 	for _, f := range a.Files {
-		if f.Path == "client.go" {
+		if f.Path == "api/client.go" {
 			client = f.Body
 		}
 	}
@@ -486,7 +486,7 @@ func TestGoServiceClientHasResilienceDefaults(t *testing.T) {
 	// forgotten cursor update is an infinite loop against a real service.
 	var paging string
 	for _, f := range a.Files {
-		if f.Path == "paging.go" {
+		if f.Path == "api/paging.go" {
 			paging = f.Body
 		}
 	}
@@ -498,5 +498,49 @@ func TestGoServiceClientHasResilienceDefaults(t *testing.T) {
 	// number that drifts.
 	if !strings.Contains(client, `ClientVersion = "`+InitialSpecVersion+`"`) {
 		t.Error("client.go does not report the spec version")
+	}
+}
+
+// Consuming a service from Go is `go get` on the service repo - api/ is
+// committed and self-contained, so there is no publish step. The client
+// defaults have to live in that package too: a consumer importing only
+// the generated code would get a protocol client with no timeout, no
+// retry and no breaker, which is the opposite of the point.
+func TestGoServiceClientIsImportable(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	a := r.Artifacts(Params{
+		Name: "svc", Team: "t", Module: "example.com/svc",
+		Port: 3000, SpecVersion: InitialSpecVersion,
+	})
+
+	paths := map[string]string{}
+	for _, f := range a.Files {
+		paths[f.Path] = f.Body
+	}
+
+	for _, want := range []string{"api/client.go", "api/paging.go"} {
+		body, ok := paths[want]
+		if !ok {
+			t.Errorf("%s is not generated into api/, so a consumer cannot import it", want)
+			continue
+		}
+		// Anything in package main is unreachable from another module.
+		if strings.HasPrefix(strings.TrimSpace(body), "package main") {
+			t.Errorf("%s is in package main; a consumer importing api/ cannot use it", want)
+		}
+	}
+
+	// Nothing in api/ may depend on the service's own main package, or
+	// importing it would drag the server in.
+	for path, body := range paths {
+		if !strings.HasPrefix(path, "api/") {
+			continue
+		}
+		if strings.Contains(body, `"example.com/svc"`) {
+			t.Errorf("%s imports the service's main package", path)
+		}
 	}
 }

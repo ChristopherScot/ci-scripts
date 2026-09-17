@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"errors"
@@ -10,13 +10,23 @@ import (
 	ht "github.com/ogen-go/ogen/http"
 )
 
+// Consuming this service from Go needs no publishing step: api/ is
+// committed, so another module imports it directly.
+//
+//	go get github.com/<owner>/{{ .Name }}@<tag>
+//
+// A version tag on the service repo is a version of its client. That is
+// why this file lives in api/ rather than beside main: a consumer that
+// imported only the generated code would get the protocol client with no
+// timeout, no retry and no breaker - the defaults are the point.
+//
 // A caller of this service gets the generated api.Client, which speaks
 // the protocol and nothing else: ogen deliberately ships no retries, no
 // timeout and no breaker. Its only extension point is WithClient, which
 // takes anything with a Do method - so this supplies the parts that
 // decide how the service behaves when a dependency is slow or failing.
 //
-//	c, err := api.NewClient(url, api.WithClient(NewHTTPClient(HTTPOptions{})))
+//	c, err := api.NewClient(url, api.WithClient(api.NewHTTPClient(api.HTTPOptions{})))
 //
 // Defaults are chosen for what they do to the SYSTEM, not for what is
 // permissive: one retry rather than five, because five can mean five

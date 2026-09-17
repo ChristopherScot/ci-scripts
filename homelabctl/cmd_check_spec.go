@@ -91,7 +91,7 @@ func checkClientVersion(dir, specVersion string, add func(string, ...any)) {
 		add("openapi.yml has no info.version - the client has no version to report")
 		return
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "client.go"))
+	b, err := os.ReadFile(filepath.Join(dir, "api", "client.go"))
 	if err != nil {
 		return // no generated client in this service
 	}
