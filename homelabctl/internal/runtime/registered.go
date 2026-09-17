@@ -49,10 +49,11 @@ func init() {
 		// npm resolves ^ ranges to the newest matching release already.
 		resolve: [][]string{{"npm", "install", "--package-lock-only"}},
 		files: map[string]string{
-			"package.json.tmpl": "package.json",
-			"server.js.tmpl":    "server.js",
-			"gitignore":         ".gitignore",
-			"dockerignore":      ".dockerignore",
+			"package.json.tmpl":   "package.json",
+			"server.js.tmpl":      "server.js",
+			"server.test.js.tmpl": "server.test.js",
+			"gitignore":           ".gitignore",
+			"dockerignore":        ".dockerignore",
 		},
 	})
 }

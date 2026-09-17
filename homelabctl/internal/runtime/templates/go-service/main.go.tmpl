@@ -86,6 +86,21 @@ func observe(next http.Handler) http.Handler {
 // fallback is what a local `go build` produces.
 var version = "dev"
 
+// routes builds the handler. Separate from main so a test can exercise
+// the real routes - and the observe middleware around them - without
+// binding a port.
+func routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", healthz)
+	// The deployment annotates this pod for scraping at /metrics; without
+	// this handler those annotations point at a 404.
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, "{{ .Name }}")
+	})
+	return mux
+}
+
 func healthz(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintln(w, "ok")
 }
@@ -102,15 +117,6 @@ func main() {
 		"version", version,
 	))
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", healthz)
-	// The deployment annotates this pod for scraping at /metrics; without
-	// this handler those annotations point at a 404.
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintln(w, "{{ .Name }}")
-	})
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "{{ .Port }}"
@@ -120,7 +126,7 @@ func main() {
 	// missing ReadHeaderTimeout specifically.
 	srv := &http.Server{
 		Addr:              "0.0.0.0:" + port,
-		Handler:           observe(mux),
+		Handler:           observe(routes()),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

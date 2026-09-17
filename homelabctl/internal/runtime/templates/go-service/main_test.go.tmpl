@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -11,5 +12,57 @@ func TestHealthz(t *testing.T) {
 	healthz(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if w.Code != http.StatusOK {
 		t.Errorf("healthz status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestRootIdentifiesTheService(t *testing.T) {
+	w := httptest.NewRecorder()
+	routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if got := strings.TrimSpace(w.Body.String()); got != "{{ .Name }}" {
+		t.Errorf("body = %q, want %q", got, "{{ .Name }}")
+	}
+}
+
+func TestMetricsAreExposed(t *testing.T) {
+	h := observe(routes())
+
+	// A request to record, so the counter exists to be scraped.
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d, want %d", w.Code, http.StatusOK)
+	}
+	body := w.Body.String()
+	// The counter the deployment's scrape annotation exists to collect.
+	if !strings.Contains(body, `http_requests_total{method="GET",route="/"`) {
+		t.Errorf("no request counter in /metrics:\n%s", body)
+	}
+	// The Go client's own process metrics.
+	if !strings.Contains(body, "go_goroutines") {
+		t.Error("no runtime metrics in /metrics")
+	}
+}
+
+// The route label is what reaches the log aggregator and the metric
+// labels. A raw URL there would write out whatever a caller put in the
+// path - a token, an id - and give Prometheus unbounded cardinality.
+func TestUnroutedPathIsNeverUsedAsALabel(t *testing.T) {
+	h := observe(routes())
+
+	h.ServeHTTP(httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodGet, "/secret-token-value/deadbeef", nil))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if strings.Contains(w.Body.String(), "deadbeef") {
+		t.Error("a request path reached a metric label")
 	}
 }

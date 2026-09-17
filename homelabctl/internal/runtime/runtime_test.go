@@ -372,3 +372,31 @@ func TestGoRuntimesAgreeOnToolchain(t *testing.T) {
 		t.Fatal("no go directive found in either Go runtime's go.mod")
 	}
 }
+
+// A runtime whose test command finds no test files exits 0, so CI reports
+// green on a service with no coverage and no signal that any is missing.
+// node-service shipped exactly that: a "test" script and no test file.
+func TestRuntimesShipATestFile(t *testing.T) {
+	suffixes := []string{"_test.go", ".test.js", ".test.ts", ".spec.js"}
+
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q) = %v", name, err)
+		}
+
+		var found string
+		for _, f := range r.Artifacts(Params{
+			Name: "svc", Team: "t", Module: "example.com/svc", Port: 3000,
+		}).Files {
+			for _, suffix := range suffixes {
+				if strings.HasSuffix(f.Path, suffix) {
+					found = f.Path
+				}
+			}
+		}
+		if found == "" {
+			t.Errorf("%s ships no test file; its CI test step would pass without running anything", name)
+		}
+	}
+}

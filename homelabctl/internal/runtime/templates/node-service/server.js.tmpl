@@ -106,16 +106,28 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   })
 }
 
-try {
-  // Fastify logs a listening line itself, unconditionally and once per
-  // bound address - `0.0.0.0` expands to every interface, so that is two
-  // lines in a container and more on a laptop, each carrying a LAN or VPN
-  // address. There is no option to turn it off, so the resolver returns
-  // the empty string and the logger drops empty messages, leaving the one
-  // line below.
-  await app.listen({ port, host: '0.0.0.0', listenTextResolver: () => '' })
-  app.log.info({ addr: ':' + port }, 'started')
-} catch (err) {
-  app.log.error({ err }, 'server stopped')
-  process.exit(1)
+// Exported so a test can use app.inject() against the real routes and
+// hooks without binding a port.
+export { app }
+
+async function start() {
+  try {
+    // Fastify logs a listening line itself, unconditionally and once per
+    // bound address - `0.0.0.0` expands to every interface, so that is
+    // two lines in a container and more on a laptop, each carrying a LAN
+    // or VPN address. There is no option to turn it off, so the resolver
+    // returns the empty string and the logger drops empty messages,
+    // leaving the one line below.
+    await app.listen({ port, host: '0.0.0.0', listenTextResolver: () => '' })
+    app.log.info({ addr: ':' + port }, 'started')
+  } catch (err) {
+    app.log.error({ err }, 'server stopped')
+    process.exit(1)
+  }
+}
+
+// Importing this file from a test must not start a server. argv[1] is the
+// entrypoint Node was given, so this is false under the test runner.
+if (process.argv[1]?.endsWith('server.js')) {
+  await start()
 }
