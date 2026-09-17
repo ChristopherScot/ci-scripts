@@ -692,3 +692,40 @@ func TestGoServiceShipsAReadme(t *testing.T) {
 		t.Error("README does not say how to regenerate after a spec change")
 	}
 }
+
+// ogen instruments every operation with OpenTelemetry by default. Nothing
+// here collects traces - no tracer is configured and the cluster runs no
+// backend - so it cost a consumer 13 modules and ~1.5MB of binary to
+// produce spans that went nowhere.
+func TestGoServiceDisablesUnusedInstrumentation(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	a := r.Artifacts(Params{
+		Name: "svc", Team: "t", Module: "example.com/svc", Owner: "acme",
+		Port: 3000, SpecVersion: InitialSpecVersion,
+	})
+
+	files := map[string]string{}
+	for _, f := range a.Files {
+		files[f.Path] = f.Body
+	}
+
+	cfg, ok := files["ogen.yml"]
+	if !ok {
+		t.Fatal("no ogen.yml, so generation takes every default")
+	}
+	if !strings.Contains(cfg, "ogen/otel") {
+		t.Error("ogen.yml does not disable otel instrumentation")
+	}
+
+	// The config only applies if the generate directive passes it.
+	gen, ok := files["generate.go"]
+	if !ok {
+		t.Fatal("no generate.go")
+	}
+	if !strings.Contains(gen, "ogen.yml") {
+		t.Error("generate.go does not pass --config, so ogen.yml is ignored")
+	}
+}

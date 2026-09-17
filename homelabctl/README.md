@@ -101,6 +101,15 @@ CI runs `homelabctl regen` and diffs, so a spec edited without regenerating
 fails the build rather than shipping an API that disagrees with its own
 documentation.
 
+`ogen.yml` turns off ogen's OpenTelemetry instrumentation. Nothing here
+collects traces - no tracer is configured, and the cluster runs no
+collector, Tempo or Jaeger - so it was producing spans that went nowhere
+while costing anyone importing the client 13 modules and ~1.5MB of binary
+(10.2MB down to 8.8MB, against 7.9MB for a bare net/http client). Metrics
+and request logs do not come from there: they are our own middleware,
+keyed on the spec's operation IDs. Re-enable it in the same commit that
+adds a collector.
+
 `homelabctl check` also reports spec problems that generate *fine* and
 still cost you something: a missing `operationId` (the generated method
 name and its metric label then follow the path, and change when it does), a

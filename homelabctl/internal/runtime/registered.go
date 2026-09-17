@@ -30,6 +30,7 @@ func init() {
 			"openapi.yml.tmpl":  "openapi.yml",
 			"README.md.tmpl":    "README.md",
 			"generate.go.tmpl":  "generate.go",
+			"ogen.yml.tmpl":     "ogen.yml",
 			"client.go.tmpl":    "api/client.go",
 
 			"client_test.go.tmpl": "api/client_test.go",
