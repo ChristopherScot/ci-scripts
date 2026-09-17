@@ -113,7 +113,11 @@ func runInit(o initOpts) error {
 			return fmt.Errorf("remote setup: %w", err)
 		}
 		dir = d
-	} else if o.parentRepo != "" {
+	} else if o.parentRepo != "" && filepath.Base(mustCwd()) != o.parentRepo {
+		// --parent-repo names the monorepo to add to. Descend into it
+		// only when we are not already there: running from inside the
+		// repo is the normal case, and prepending its name produced
+		// platform/platform/services/<name>.
 		dir = o.parentRepo
 	}
 	if o.remoteOnly {
@@ -162,7 +166,6 @@ func artifactParams(o initOpts, c *config.Config) runtime.Params {
 		Name:        o.name,
 		Team:        c.Team,
 		SpecVersion: runtime.InitialSpecVersion,
-		Module:      fmt.Sprintf("github.com/%s/%s", o.owner, o.name),
 		Owner:       o.owner,
 		Port:        o.port,
 		Image:       c.Image.Repository,
@@ -170,10 +173,56 @@ func artifactParams(o initOpts, c *config.Config) runtime.Params {
 	if o.parentRepo != "" {
 		p.PathFilter = filepath.Join("services", o.name)
 	}
+	p.Module = modulePath(o, c)
 	return p
 }
 
+// mustCwd is the working directory, or "." when it cannot be determined -
+// in which case the caller's comparison simply fails and the old
+// behaviour applies.
+func mustCwd() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
+}
+
+// modulePath is where Go will fetch this service from.
+//
+// Not a preference: Go requires a module's path to match its location, so
+// a wrong value here is not a stylistic problem, it is a module nobody can
+// `go get`. Three cases, in order of precedence:
+//
+//   - config.yaml says so. The escape hatch for a repo that is not named
+//     after the service it holds.
+//   - a monorepo: the parent repo plus the directory the service sits in.
+//     Deriving this from the service name alone - which is what this did
+//     until 2026-09-17 - produced a path that pointed nowhere.
+//   - a repo of its own, named after the service.
+func modulePath(o initOpts, c *config.Config) string {
+	if c.Module != "" {
+		return c.Module
+	}
+	if o.parentRepo != "" {
+		return fmt.Sprintf("github.com/%s/%s/%s", o.owner, o.parentRepo,
+			filepath.ToSlash(filepath.Join("services", o.name)))
+	}
+	return fmt.Sprintf("github.com/%s/%s", o.owner, o.name)
+}
+
+// buildConfig is what the new service will be.
+//
+// An existing config.yaml wins. init skips files that are already there,
+// so without this it would keep a config it then ignored - writing a
+// go.mod derived from flags while config.yaml said something else, and
+// leaving the two to disagree silently. Re-running init in a directory
+// that already has one is how a half-finished scaffold gets completed.
 func buildConfig(o initOpts) (*config.Config, error) {
+	if existing, err := config.Load(defaultConfigPath); err == nil {
+		return existing, nil
+	}
+
 	image := fmt.Sprintf("ghcr.io/%s/%s", o.owner, o.name)
 	if o.parentRepo != "" {
 		// One registry path per repo would collide in a monorepo.

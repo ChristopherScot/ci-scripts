@@ -32,6 +32,11 @@ const Schema = `{
       "description": "Which language/shape plugin builds this. See homelabctl init --help.",
       "examples": ["go-service", "node-service", "go-cli"]
     },
+    "module": {
+      "type": "string",
+      "description": "Go module path. Derived from the repo (and the service directory, in a monorepo) unless set here - needed when the repo is not named after the service. Go requires this to match where the module is fetched from.",
+      "examples": ["github.com/owner/go-widget"]
+    },
     "kind": {
       "type": "string",
       "enum": ["service", "cronjob"],

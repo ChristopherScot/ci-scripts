@@ -26,6 +26,17 @@ type Config struct {
 	// to this struct.
 	Runtime string `yaml:"runtime"`
 
+	// Module is the Go module path. Normally derived - from the repo for a
+	// standalone service, from the repo plus the service's directory in a
+	// monorepo - and set here only when the repo is not named after the
+	// service.
+	//
+	// Go requires a module's path to match where it is fetched from, so
+	// this is not a preference: get it wrong and `go get` fails for every
+	// consumer. go-shlink-redirector is the case that needs it - the repo
+	// carries a `go-` prefix the deployed service does not.
+	Module string `yaml:"module,omitempty"`
+
 	// Kind is the Kubernetes shape this service takes. Language and shape
 	// are independent axes: a Go service and a Go cron job share every
 	// build concern and no manifest concern, so `runtime` chooses how it
@@ -123,6 +134,7 @@ var knownTopLevelKeys = map[string]bool{
 	"kind": true, "schedule": true, "timeZone": true,
 	"replicas": true, "port": true, "image": true, "env": true,
 	"secrets": true, "ingress": true, "probes": true, "resources": true,
+	"module":    true,
 	"overrides": true, "patches": true, "hardened": true, "metrics": true,
 }
 
