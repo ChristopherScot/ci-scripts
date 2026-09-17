@@ -618,9 +618,13 @@ func TestGoServiceShipsATypeScriptClient(t *testing.T) {
 		t.Error("no clients/ts/index.d.ts; consumers get no types for the client itself")
 	}
 
-	// The types come from the spec, so CI has to catch a stale schema
-	// the same way it catches stale Go.
-	if !strings.Contains(a.Workflow, "clients/ts/schema.d.ts") {
-		t.Error("CI does not check that the TypeScript schema is current")
+	// The types come from the spec, so CI has to catch a stale client
+	// the same way it catches stale Go - and via the same command a
+	// developer runs, or the two can check different things.
+	if !strings.Contains(a.Workflow, "homelabctl regen") {
+		t.Error("CI does not regenerate from the spec before diffing")
+	}
+	if !strings.Contains(a.Workflow, "clients/") {
+		t.Error("CI's staleness diff does not cover the TypeScript client")
 	}
 }

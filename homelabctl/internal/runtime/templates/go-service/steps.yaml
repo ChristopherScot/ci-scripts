@@ -3,21 +3,6 @@
           go-version-file: go.mod
           cache: true
 
-      # openapi.yml is the source of truth, so everything derived from
-      # it - the server interface, both clients, the versions they report
-      # - must match what is committed. Otherwise a spec change merges
-      # with stale code and the API quietly diverges from its own
-      # documentation.
-      #
-      # This regenerates and diffs rather than trusting anyone to have
-      # run the right commands in the right order.
-      - name: Check generated code is current
-        run: |
-          go generate ./...
-          npx --yes openapi-typescript@7 openapi.yml -o clients/ts/schema.d.ts
-          git diff --exit-code -- api/ clients/ts/schema.d.ts \
-            || { echo "::error::generated code is stale - run 'homelabctl regen' and commit"; exit 1; }
-
       - name: Test
         run: go test -race ./...
 
