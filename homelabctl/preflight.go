@@ -68,6 +68,15 @@ func checkEnvDrift(c *config.Config, live *liveState) []Finding {
 	for k := range c.Env {
 		declared[k] = true
 	}
+	// Secrets reach the pod through envFrom, so they are declared even
+	// though they never appear under `env:`. Without this, every service
+	// using `secrets:` is told its own secret keys are undeclared drift -
+	// and the advice, "add them under env:", would put them in plaintext.
+	if c.Secrets != nil {
+		for _, k := range c.Secrets.Keys {
+			declared[k] = true
+		}
+	}
 
 	var missing []string
 	for _, name := range live.Env {
