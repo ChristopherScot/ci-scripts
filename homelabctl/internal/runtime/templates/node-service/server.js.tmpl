@@ -1,0 +1,133 @@
+import Fastify, { LogController } from 'fastify'
+import { collectDefaultMetrics, Counter, Histogram, register } from 'prom-client'
+
+const port = Number(process.env.PORT || '{{ .Port }}')
+
+// Matches what go-service's slog emits, so one Loki query works against
+// either runtime: an ISO-8601 `time`, an uppercase `level` name rather
+// than pino's numeric default, and `msg`.
+//
+// The bindings put service, team and version on every line. Alloy adds
+// pod and namespace labels in Loki, but a line copied into a ticket, an
+// alert or a terminal arrives without them - and "shutting down" from an
+// unnamed service is not worth much. VERSION is stamped by CI; it is
+// "dev" for a local run.
+const app = Fastify({
+  logger: {
+    level: process.env.LOG_LEVEL || 'info',
+    base: {
+      service: '{{ .Name }}',
+      team: '{{ .Team }}',
+      version: process.env.VERSION || 'dev',
+    },
+    timestamp: () => `,"time":"${new Date().toISOString()}"`,
+    formatters: {
+      level: (label) => ({ level: label.toUpperCase() }),
+    },
+    // Fastify's own listening lines are silenced by returning an empty
+    // message from listenTextResolver; drop those here so they do not
+    // appear as blank entries.
+    hooks: {
+      logMethod(args, method) {
+        if (args[0] === '') return
+        return method.apply(this, args)
+      },
+    },
+  },
+  // Fastify's own per-request lines duplicate the one the onResponse hook
+  // below emits, and they log the raw url. The top-level
+  // disableRequestLogging is deprecated in Fastify 5 and goes away in 6,
+  // so this goes through a LogController instance instead.
+  logController: new LogController({ disableRequestLogging: true }),
+})
+
+// Default process and heap metrics, the Node equivalent of what the Go
+// client registers for free.
+collectDefaultMetrics()
+
+const requests = new Counter({
+  name: 'http_requests_total',
+  help: 'Requests by route, method and status.',
+  labelNames: ['route', 'method', 'status'],
+})
+
+const latency = new Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Request latency by route and method.',
+  labelNames: ['route', 'method'],
+})
+
+// Log and measure every request.
+//
+// The route label is the matched ROUTE PATTERN, never the raw url: a path
+// can carry a token or an id, and this reaches both the log aggregator
+// and a metric label. A label per distinct URL would also give Prometheus
+// unbounded cardinality. Unrouted requests report "other" rather than
+// their path, for the same reason.
+app.addHook('onResponse', (request, reply, done) => {
+  const route = request.routeOptions?.url ?? 'other'
+
+  // Alloy scrapes /metrics every 15s and the kubelet probes /healthz as
+  // often; logging those buries real traffic and inflates the counters
+  // with self-observation.
+  if (route !== '/metrics' && route !== '/healthz') {
+    const seconds = reply.elapsedTime / 1000
+    requests.inc({ route, method: request.method, status: reply.statusCode })
+    latency.observe({ route, method: request.method }, seconds)
+    request.log.info({
+      method: request.method,
+      route,
+      status: reply.statusCode,
+      duration_ms: Math.round(reply.elapsedTime),
+    }, 'request')
+  }
+  done()
+})
+
+app.get('/healthz', async (_request, reply) => reply.type('text/plain').send('ok\n'))
+
+// The deployment annotates this pod for scraping here. Without this route
+// Alloy would scrape the 404 handler and fail to parse the body - which
+// reads as a data problem rather than a missing endpoint.
+app.get('/metrics', async (_request, reply) =>
+  reply.type(register.contentType).send(await register.metrics()))
+
+app.get('/', async (_request, reply) => reply.type('text/plain').send('{{ .Name }}\n'))
+
+// Without this, SIGTERM kills in-flight requests on every deploy.
+// Kubernetes sends SIGTERM, waits terminationGracePeriodSeconds, then
+// SIGKILLs; draining inside that window is what makes a rollout invisible
+// to callers.
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, async () => {
+    app.log.info('shutting down')
+    await app.close()
+    process.exit(0)
+  })
+}
+
+// Exported so a test can use app.inject() against the real routes and
+// hooks without binding a port.
+export { app }
+
+async function start() {
+  try {
+    // Fastify logs a listening line itself, unconditionally and once per
+    // bound address - `0.0.0.0` expands to every interface, so that is
+    // two lines in a container and more on a laptop, each carrying a LAN
+    // or VPN address. There is no option to turn it off, so the resolver
+    // returns the empty string and the logger drops empty messages,
+    // leaving the one line below.
+    await app.listen({ port, host: '0.0.0.0', listenTextResolver: () => '' })
+    app.log.info({ addr: ':' + port }, 'started')
+  } catch (err) {
+    app.log.error({ err }, 'server stopped')
+    process.exit(1)
+  }
+}
+
+// Importing this file from a test must not start a server. argv[1] is the
+// entrypoint Node was given, so this is false under the test runner.
+if (process.argv[1]?.endsWith('server.js')) {
+  await start()
+}

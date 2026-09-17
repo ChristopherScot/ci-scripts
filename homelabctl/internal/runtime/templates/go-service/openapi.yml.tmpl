@@ -1,0 +1,78 @@
+# The API contract. This file is the source of truth: `go generate`
+# turns it into the server interface, request/response types, validation
+# and a typed client, and the compiler then refuses to build until the
+# handlers match. Change the API here, not in Go.
+openapi: 3.0.3
+info:
+  title: {{ .Name }}
+  # Bump this when the API changes. The generated client reports it in
+  # X-Client-Version, so one version covers the API and its clients.
+  version: {{ .SpecVersion }}
+  description: {{ .Name }}, owned by {{ .Team }}.
+
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: Liveness and readiness probe.
+      responses:
+        '200':
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        default:
+          description: Unexpected error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /:
+    get:
+      operationId: getRoot
+      summary: Identify the service and the running build.
+      responses:
+        '200':
+          description: Service identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Identity'
+        default:
+          description: Unexpected error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    Identity:
+      type: object
+      required: [service, version]
+      properties:
+        service:
+          type: string
+        version:
+          type: string
+
+    # Declaring a `default` response with this shape is what lets ogen
+    # generate convenient errors: a handler can return a plain error and
+    # the generated code renders it, instead of every operation needing
+    # its own error union.
+    Error:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string

@@ -2,6 +2,9 @@ name: Build and Release
 
 on:
   push:
+    # main only: without this, a VERSION bump on any branch publishes a
+    # release. v1.0.0 shipped from an unmerged PR branch that way.
+    branches: [main]
     paths:
       - "VERSION"
 
@@ -44,21 +47,38 @@ jobs:
           echo "VERSION_DESCRIPTION=$(cat VERSION | head -n 3 | tail -n 1)" >> $GITHUB_ENV
         working-directory: .
 
-      - name: Build binary
+      - name: Test
         run: |
           cd ${{ matrix.subfolder }}
-          go build -o ${{ matrix.subfolder }}
+          go test -race ./...
 
-      - name: Archive binary
+      # Cross-compile and name assets <tool>_<goos>_<goarch>.tar.gz, which
+      # is what each tool's `update` command looks for. A single
+      # <tool>.tar.gz cannot be found by it, so self-update silently fails
+      # for everyone.
+      #
+      # Version must be injected here too: without it a released binary
+      # reports "dev" and refuses to update itself, so the feature is dead
+      # on arrival.
+      - name: Cross-compile
         run: |
-          tar -czvf ${{ matrix.subfolder }}.tar.gz -C ${{ matrix.subfolder }} ${{ matrix.subfolder }}
+          cd ${{ matrix.subfolder }}
+          LDFLAGS="-s -w -X main.Version=${{ env.VERSION }}"
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            GOOS="${target%/*}"; GOARCH="${target#*/}"
+            mkdir -p "dist/$GOOS/$GOARCH"
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags "$LDFLAGS" \
+              -o "dist/$GOOS/$GOARCH/${{ matrix.subfolder }}" .
+            tar -czf "../${{ matrix.subfolder }}_${GOOS}_${GOARCH}.tar.gz" \
+              -C "dist/$GOOS/$GOARCH" "${{ matrix.subfolder }}"
+          done
 
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: ./${{ matrix.subfolder }}.tar.gz
+          files: ./${{ matrix.subfolder }}_*.tar.gz
           tag_name: ${{ env.VERSION }}
           body: ${{ env.VERSION_DESCRIPTION }}
           draft: false

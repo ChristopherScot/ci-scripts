@@ -1,0 +1,13 @@
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Not --if-present: the scaffold always ships tests, so a missing
+      # script means someone removed them, and CI should say so rather
+      # than skip silently.
+      - name: Test
+        run: npm test

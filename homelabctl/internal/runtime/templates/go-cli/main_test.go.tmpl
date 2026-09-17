@@ -1,0 +1,45 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestVersionIsSet(t *testing.T) {
+	if Version == "" {
+		t.Error("Version is empty; it should default to \"dev\" and be set via ldflags at release")
+	}
+}
+
+// The root command wires every subcommand; if one is dropped the CLI still
+// compiles and the command silently disappears.
+func TestRootHasExpectedCommands(t *testing.T) {
+	want := map[string]bool{"update": false, "version": false}
+	for _, c := range rootCmd().Commands() {
+		name := strings.Fields(c.Use)[0]
+		if _, ok := want[name]; ok {
+			want[name] = true
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("root command is missing %q", name)
+		}
+	}
+}
+
+func TestIsNewer(t *testing.T) {
+	for _, tc := range []struct {
+		latest, current string
+		want            bool
+	}{
+		{"1.2.0", "1.1.0", true},
+		{"1.1.0", "1.2.0", false},
+		{"1.1.0", "1.1.0", false},
+		{"1.1.1", "1.1", true},
+	} {
+		if got := isNewer(tc.latest, tc.current); got != tc.want {
+			t.Errorf("isNewer(%q, %q) = %v, want %v", tc.latest, tc.current, got, tc.want)
+		}
+	}
+}

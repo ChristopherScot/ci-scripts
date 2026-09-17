@@ -1,0 +1,14 @@
+{
+  "name": "@{{ .Owner }}/{{ .Name }}-client",
+  "version": "{{ .SpecVersion }}",
+  "description": "Typed client for the {{ .Name }} API, generated from its OpenAPI spec.",
+  "type": "module",
+  "main": "clients/ts/index.js",
+  "types": "clients/ts/index.d.ts",
+  "files": [
+    "clients/ts"
+  ],
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  }
+}

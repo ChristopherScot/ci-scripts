@@ -1,0 +1,66 @@
+# Builds and pushes the image. Deployment happens in-cluster:
+# argocd-image-updater watches the registry and commits the new digest to
+# the homelab repo itself, so this workflow needs no homelab credential -
+# GITHUB_TOKEN is issued per run and can only push packages.
+name: build {{ .Name }}
+
+on:
+  push:
+    branches: [main]{{ if .PathFilter }}
+    paths: ['{{ .PathFilter }}/**', '.github/workflows/{{ .Name }}.yaml']{{ end }}
+  pull_request:{{ if .PathFilter }}
+    paths: ['{{ .PathFilter }}/**']{{ end }}
+  workflow_dispatch:
+
+# Two pushes in quick succession otherwise race to publish :latest, and
+# whichever loses is the digest image-updater may pick up.
+concurrency:
+  group: ${{ "{{" }} github.workflow {{ "}}" }}-${{ "{{" }} github.ref {{ "}}" }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write{{ if .PathFilter }}
+    defaults:
+      run:
+        working-directory: {{ .PathFilter }}{{ end }}
+    steps:
+      - uses: actions/checkout@v4
+
+{{ .BuildSteps }}
+      - name: Check deploy manifests
+        run: |
+          curl -fsSL https://github.com/ChristopherScot/ci-scripts/releases/latest/download/homelabctl_linux_amd64.tar.gz | tar -xz
+          ./homelabctl check deploy
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ "{{" }} github.actor {{ "}}" }}
+          password: ${{ "{{" }} secrets.GITHUB_TOKEN {{ "}}" }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: {{ .Image }}
+          # Full SHA: an abbreviated one is not a registry tag and gives
+          # ImagePullBackOff.
+          tags: |
+            type=raw,value=latest,enable={{ "{{" }}is_default_branch{{ "}}" }}
+            type=sha,format=long
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: {{ .Context }}
+          # Stamps the commit into the image so log lines name their build.
+          build-args: |
+            VERSION=${{ "{{" }} github.sha {{ "}}" }}
+          push: ${{ "{{" }} github.event_name != 'pull_request' {{ "}}" }}
+          tags: ${{ "{{" }} steps.meta.outputs.tags {{ "}}" }}
+          labels: ${{ "{{" }} steps.meta.outputs.labels {{ "}}" }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
