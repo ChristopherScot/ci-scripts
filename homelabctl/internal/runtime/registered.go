@@ -5,9 +5,14 @@ package runtime
 func init() {
 	Register(embedded{
 		name: "go-service", dir: "go-service", deployable: true, hardened: true,
-		// Without go.sum the service does not build, and the generated
-		// go.mod names dependencies it does not lock.
-		resolve: []string{"go", "mod", "tidy"},
+		// `go get -u` first: tidy alone would resolve the transitive
+		// graph to the minimums client_golang declares, which are older
+		// than what is released. Without either there is no go.sum and
+		// the service does not build at all.
+		resolve: [][]string{
+			{"go", "get", "-u", "./..."},
+			{"go", "mod", "tidy"},
+		},
 		files: map[string]string{
 			"go.mod.tmpl":       "go.mod",
 			"main.go.tmpl":      "main.go",
@@ -22,7 +27,10 @@ func init() {
 	// self-update command homelabctl uses.
 	Register(embedded{
 		name: "go-cli", dir: "go-cli", deployable: false, hardened: false,
-		resolve: []string{"go", "mod", "tidy"},
+		resolve: [][]string{
+			{"go", "get", "-u", "./..."},
+			{"go", "mod", "tidy"},
+		},
 		files: map[string]string{
 			"go.mod.tmpl":        "go.mod",
 			"main.go.tmpl":       "main.go",
@@ -38,7 +46,8 @@ func init() {
 		name: "node-service", dir: "node-service", deployable: true, hardened: true,
 		// Generates package-lock.json, which the Dockerfile's `npm ci`
 		// requires and which is not otherwise created.
-		resolve: []string{"npm", "install", "--package-lock-only"},
+		// npm resolves ^ ranges to the newest matching release already.
+		resolve: [][]string{{"npm", "install", "--package-lock-only"}},
 		files: map[string]string{
 			"package.json.tmpl": "package.json",
 			"server.js.tmpl":    "server.js",

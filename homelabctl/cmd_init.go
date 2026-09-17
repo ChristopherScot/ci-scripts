@@ -138,14 +138,16 @@ func runInit(o initOpts) error {
 // tidy runs the runtime's dependency-resolution command in the new
 // service directory. What to run is the runtime's business, declared in
 // registered.go; this only knows how to run it.
-func tidy(dir string, argv []string) error {
-	if len(argv) == 0 {
-		return nil
-	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s in %s: %w\n%s", strings.Join(cmd.Args, " "), dir, err, out)
+func tidy(dir string, cmds [][]string) error {
+	for _, argv := range cmds {
+		if len(argv) == 0 {
+			continue
+		}
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%s in %s: %w\n%s", strings.Join(cmd.Args, " "), dir, err, out)
+		}
 	}
 	return nil
 }

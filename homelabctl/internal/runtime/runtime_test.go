@@ -189,14 +189,16 @@ func TestRuntimesDeclareDependencyResolution(t *testing.T) {
 			if !needsLock {
 				continue
 			}
-			argv := r.ResolveDeps()
-			if len(argv) == 0 {
+			cmds := r.ResolveDeps()
+			if len(cmds) == 0 {
 				t.Errorf("%s generates %s but declares no ResolveDeps; its scaffold will not build",
 					name, f.Path)
 				continue
 			}
-			if argv[0] != tool {
-				t.Errorf("%s generates %s but resolves with %q", name, f.Path, argv[0])
+			for _, argv := range cmds {
+				if len(argv) == 0 || argv[0] != tool {
+					t.Errorf("%s generates %s but resolves with %v", name, f.Path, argv)
+				}
 			}
 		}
 	}
@@ -312,8 +314,8 @@ func TestTemplatesPinSupportedVersions(t *testing.T) {
 	// The Node runtime and the Go directive across every artifact a
 	// runtime produces, keyed by what must appear.
 	wants := map[string][]string{
-		"go-service":   {"go 1.25", "client_golang v1.24"},
-		"go-cli":       {"go 1.25"},
+		"go-service":   {"go 1.27", "client_golang v1.24"},
+		"go-cli":       {"go 1.27"},
 		"node-service": {"nodejs24", "node:24", "node-version: 24", "fastify", "prom-client"},
 	}
 
