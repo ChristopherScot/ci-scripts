@@ -66,12 +66,7 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          # The REPOSITORY root, not the service directory, because npm
-          # workspaces keep one package-lock.json there and a build
-          # context never includes its parent. The Dockerfile COPYs the
-          # service through its own path instead.
-          context: {{ .RootContext }}
-          file: {{ .Dockerfile }}
+          context: {{ .Context }}
           # Stamps the commit into the image so log lines name their build.
           build-args: |
             VERSION=${{ "{{" }} github.sha {{ "}}" }}

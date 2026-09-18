@@ -92,11 +92,7 @@ func (p Params) BinaryName() string {
 
 // Context is the Docker build context: the service directory in a
 // monorepo, the repo root otherwise.
-//
-// A runtime whose build needs files from ABOVE its own directory - see
-// node-service, where npm workspaces put one package-lock.json at the
-// repo root - must override this, because a context never includes its
-// parent. RootContext is that override.
+
 func (p Params) Context() string {
 	if p.PathFilter != "" {
 		return p.PathFilter
@@ -104,34 +100,12 @@ func (p Params) Context() string {
 	return "."
 }
 
-// RootContext builds from the repository root whatever the layout, for a
-// runtime whose build inputs are not all inside the service directory.
+// ServiceDir is where this service's files live relative to the
+// repository ROOT: its directory in a monorepo, "." otherwise.
 //
-// It always returns ".", and exists so the templates that need it say so
-// by name rather than hardcoding a dot that reads like an oversight.
-func (p Params) RootContext() string {
-	return "."
-}
-
-// Dockerfile is the path to the Dockerfile RELATIVE TO RootContext.
-//
-// build-push-action resolves `file:` against the context, not the repo,
-// so a root context has to name the service directory explicitly; with a
-// context of "." and no `file:`, Docker looks for ./Dockerfile and a
-// monorepo has none.
-func (p Params) Dockerfile() string {
-	if p.PathFilter != "" {
-		return p.PathFilter + "/Dockerfile"
-	}
-	return "Dockerfile"
-}
-
-// ServiceDir is where the service's own files live relative to the
-// repository root: its directory in a monorepo, "." otherwise.
-//
-// A Dockerfile built from the root context COPYs through this, since
-// every path it names is resolved from the root rather than from beside
-// the Dockerfile.
+// For inputs that resolve from the repo root regardless of where a step
+// runs - a GitHub Actions action input like cache-dependency-path, which
+// ignores defaults.run.working-directory - this is the path to use.
 func (p Params) ServiceDir() string {
 	if p.PathFilter != "" {
 		return p.PathFilter

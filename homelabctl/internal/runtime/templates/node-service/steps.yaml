@@ -3,25 +3,22 @@
       # it, a monorepo service fails with "Dependencies lock file is not
       # found in /home/runner/work/<repo>/<repo>" before installing
       # anything.
-      #
-      # In a monorepo that path IS the repository root: the services are
-      # npm workspaces, so there is one lockfile for all of them.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: {{ .ServiceDir }}/package-lock.json
 
-      # Installed from the workspace root, not from this service.
+      # In this service's own directory, from its own lockfile.
       #
-      # A service consuming a sibling's generated TypeScript client links
-      # to it rather than downloading it, and `npm ci` inside the service
-      # creates that link WITHOUT installing what the client itself
-      # depends on - so the first import fails with "Cannot find package
-      # 'openapi-fetch'". One install at the root resolves the whole
-      # graph, and is what makes the client usable before it is published.
+      # A service consuming a sibling's generated TypeScript client
+      # resolves it from npm like any other dependency, so there is
+      # nothing to hoist and no workspace to install from. That was not
+      # always true: before the client was published the only way to
+      # resolve it was an npm workspace, which links the sibling by
+      # SYMLINK - fine in CI, fatal in the image, where the link dangles
+      # and node exits with ERR_MODULE_NOT_FOUND.
       - name: Install
-        working-directory: .
         run: npm ci
 
       # Not --if-present: the scaffold always ships tests, so a missing

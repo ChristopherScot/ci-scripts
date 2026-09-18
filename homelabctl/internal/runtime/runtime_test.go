@@ -1140,12 +1140,11 @@ func TestSetupActionsGetRepoRootPathsInAMonorepo(t *testing.T) {
 			"spec=services/svc/openapi.yml",
 		}},
 		{"go-cli", []string{"go-version-file: services/svc/go.mod", "cache-dependency-path: services/svc/go.sum"}},
-		// node-service points at the REPOSITORY root, not its own
-		// directory: the services are npm workspaces, so there is one
-		// lockfile for all of them. Installing per-service links a
-		// sibling's generated client without installing what that client
-		// depends on, which fails at the first import.
-		{"node-service", []string{"cache-dependency-path: package-lock.json", "working-directory: ."}},
+		// node-service names its own directory. cache-dependency-path is
+		// an action input, so it resolves from the repo root even though
+		// `npm ci` runs in the service directory - the one path here
+		// that is not relative to the working directory.
+		{"node-service", []string{"cache-dependency-path: services/svc/package-lock.json"}},
 	} {
 		r, err := Get(tc.runtime)
 		if err != nil {
@@ -1233,56 +1232,58 @@ func TestRegenRewritesOnlyGeneratedFiles(t *testing.T) {
 	}
 }
 
-// A node-service image builds from the repository root, because that is
-// where npm workspaces keep the one package-lock.json its `npm ci` needs.
+// CI and the image build must agree on where a node service's lockfile
+// is, because when they disagree the failure is remote from its cause.
 //
-// This pairing is easy to half-change and the failure is remote from the
-// cause: the workflow's test job installed from the root lockfile while
-// the image still built with the SERVICE directory as its context, so
-// `COPY package*.json ./` matched nothing and the build died with npm's
-// EUSAGE - "can only install with an existing package-lock.json" - about
-// a lockfile that was right there, one level up and outside the context.
-func TestNodeServiceImageBuildsFromTheRepoRoot(t *testing.T) {
-	r, err := Get("node-service")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := testParams()
-	p.PathFilter = "services/svc"
-	a := r.Artifacts(p)
-
-	// A context of "." with an explicit file:, not the service directory.
-	// Without the file: Docker would look for ./Dockerfile, which a
-	// monorepo does not have.
-	for _, want := range []string{"context: .", "file: services/svc/Dockerfile"} {
-		if !strings.Contains(a.Workflow, want) {
-			t.Errorf("workflow missing %q", want)
+// They did once: the workflow installed from a workspace lockfile at the
+// repository root while the image still built with the SERVICE directory
+// as its context, so `COPY package*.json ./` matched nothing and the
+// build died with npm's EUSAGE - "can only install with an existing
+// package-lock.json" - about a lockfile sitting one level up, outside
+// the context.
+//
+// One lockfile, beside the service, used by both.
+func TestNodeServiceLockfileIsWhereBothCIAndDockerLookForIt(t *testing.T) {
+	for _, tc := range []struct{ pathFilter, wantCache, wantContext string }{
+		{"", "./package-lock.json", "context: ."},
+		{"services/svc", "services/svc/package-lock.json", "context: services/svc"},
+	} {
+		r, err := Get("node-service")
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
+		p := testParams()
+		p.PathFilter = tc.pathFilter
+		a := r.Artifacts(p)
 
-	// Every COPY of the service's own files goes through its directory,
-	// since paths resolve from the root rather than from beside the
-	// Dockerfile. A bare `COPY . .` here would ship every sibling.
-	if strings.Contains(a.Dockerfile, "COPY --chown=65532:65532 . .") {
-		t.Error("Dockerfile COPYs the whole root context; expected the service directory")
-	}
-	if !strings.Contains(a.Dockerfile, "services/svc/") {
-		t.Error("Dockerfile does not COPY through the service directory")
-	}
+		// setup-node resolves cache-dependency-path from the repository
+		// root, so it has to name the service directory explicitly.
+		if !strings.Contains(a.Workflow, "cache-dependency-path: "+tc.wantCache) {
+			t.Errorf("PathFilter %q: workflow missing cache path %q", tc.pathFilter, tc.wantCache)
+		}
+		// The build context is the service directory, which is what puts
+		// its package-lock.json inside the context for `npm ci`.
+		if !strings.Contains(a.Workflow, tc.wantContext) {
+			t.Errorf("PathFilter %q: workflow missing %q", tc.pathFilter, tc.wantContext)
+		}
+		// Installed in the service directory, not hoisted to a workspace
+		// root: a published client is an ordinary dependency, and a
+		// workspace would link a sibling by symlink that dangles in the
+		// runtime image.
+		if strings.Contains(a.Workflow, "working-directory: .\n        run: npm ci") {
+			t.Errorf("PathFilter %q: npm ci still installs from a workspace root", tc.pathFilter)
+		}
 
-	// Docker reads a plain .dockerignore only from the context root, so
-	// a per-service one has to use the Dockerfile-specific name to be
-	// read at all.
-	var found bool
-	for _, f := range a.Files {
-		if f.Path == "Dockerfile.dockerignore" {
-			found = true
+		// A plain .dockerignore is read from the context root, which the
+		// service directory is.
+		var found bool
+		for _, f := range a.Files {
+			if f.Path == ".dockerignore" {
+				found = true
+			}
 		}
-		if f.Path == ".dockerignore" {
-			t.Error("plain .dockerignore in the service directory is never read from a root context")
+		if !found {
+			t.Errorf("PathFilter %q: no .dockerignore", tc.pathFilter)
 		}
-	}
-	if !found {
-		t.Error("no Dockerfile.dockerignore")
 	}
 }
