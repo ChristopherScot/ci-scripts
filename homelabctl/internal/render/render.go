@@ -785,7 +785,13 @@ type AppParams struct {
 	// is a scaffold that has not been pushed yet. The generator skips an
 	// entry it cannot locate rather than pointing Argo at nothing.
 	RepoURL string `json:"repoURL,omitempty"`
-	Path    string `json:"path,omitempty"`
+	// Named manifestPath, not path: the ApplicationSet's git file
+	// generator supplies its own {{path}} - the directory of the matched
+	// argocd.json - and it wins. A field called "path" here is read by
+	// the generator and silently ignored, so every Application got the
+	// entry's own directory as its source path and failed to sync with
+	// no error anywhere.
+	ManifestPath string `json:"manifestPath,omitempty"`
 }
 
 // AppEntry is the generator input for one service, as deploy/argocd.json.
@@ -808,7 +814,7 @@ func AppEntry(c *config.Config, src Source) (string, error) {
 		// The service's own directory under deploy/, which is where
 		// kustomization.yaml lands - Argo needs the directory holding
 		// it, not the one above.
-		Path: appPath(src.Path, c.Name),
+		ManifestPath: appPath(src.Path, c.Name),
 	}, "", "  ")
 	if err != nil {
 		return "", err

@@ -566,8 +566,8 @@ func TestAppEntryPointsAtTheManifestDirectory(t *testing.T) {
 	if got["repoURL"] != src.RepoURL {
 		t.Errorf("repoURL = %q, want %q", got["repoURL"], src.RepoURL)
 	}
-	if want := "services/svc/deploy/svc"; got["path"] != want {
-		t.Errorf("path = %q, want %q", got["path"], want)
+	if want := "services/svc/deploy/svc"; got["manifestPath"] != want {
+		t.Errorf("manifestPath = %q, want %q", got["manifestPath"], want)
 	}
 }
 
@@ -581,7 +581,7 @@ func TestAppEntryOmitsAnUnknownSource(t *testing.T) {
 			body = o.Body
 		}
 	}
-	for _, unwanted := range []string{"repoURL", "path"} {
+	for _, unwanted := range []string{"repoURL", "manifestPath"} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("%s carries %q with no source:\n%s", AppEntryFile, unwanted, body)
 		}
