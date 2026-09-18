@@ -138,6 +138,25 @@ type SecretKey struct {
 	Property string // the property under VaultPath
 }
 
+// MarshalYAML writes back whichever form the key came from, so a file
+// this tool writes is a file it can read.
+//
+// Without it, yaml.Marshal emits the struct - {Env: X, Property: y} -
+// which UnmarshalYAML then rejects, because it accepts a string or a
+// single-entry mapping and neither is that. The asymmetry is silent
+// until something round-trips a config, and then it fails at load with
+// an error about the file rather than about the code.
+//
+// No discriminator field is needed to remember the original form: the
+// bare form means "property is the lowercased env var", so the rule that
+// decodes it also decides how to encode it.
+func (k SecretKey) MarshalYAML() (any, error) {
+	if k.Property == strings.ToLower(k.Env) {
+		return k.Env, nil
+	}
+	return map[string]string{k.Env: k.Property}, nil
+}
+
 // EnvKeys builds keys the conventional way, for a Config assembled in Go
 // code rather than decoded from YAML.
 func EnvKeys(envs ...string) []SecretKey {
