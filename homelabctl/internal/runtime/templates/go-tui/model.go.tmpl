@@ -11,13 +11,15 @@ package main
 //
 // Note this is bubbletea v2, whose API differs from most examples
 // online: Init returns only a tea.Cmd, View returns a tea.View rather
-// than a string, and key presses arrive as tea.KeyPressMsg. v1 code will
-// not compile here.
+// than a string, key presses arrive as tea.KeyPressMsg, and alt-screen
+// is a field on the View instead of a program option. v1 code will not
+// compile here. See UPGRADE_GUIDE_V2.md in the bubbletea module.
 
 import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // item is one row. list.Item needs these three methods; FilterValue is
@@ -31,18 +33,14 @@ func (i item) Title() string       { return i.name }
 func (i item) Description() string { return i.desc }
 func (i item) FilterValue() string { return i.name }
 
-// Starting size, until the terminal reports its own.
-const (
-	defaultWidth  = 80
-	defaultHeight = 24
-)
+// appStyle frames the whole interface. Its padding is subtracted from
+// the window size before the list is sized, via GetFrameSize below -
+// hardcoding the same numbers in two places is how a layout ends up one
+// row too tall and scrolls its own help off screen.
+var appStyle = lipgloss.NewStyle().Padding(1, 2)
 
 type model struct {
 	list list.Model
-
-	// Replaced by the first tea.WindowSizeMsg. Until then these hold the
-	// defaults above, so the first frame draws something.
-	width, height int
 }
 
 func newModel() model {
@@ -51,15 +49,11 @@ func newModel() model {
 		item{name: "second", desc: "see the Cmd note in Init"},
 	}
 
-	// NewDefaultDelegate draws title + description per row. Swap it for
-	// your own delegate to change how a row looks.
-	//
-	// Sized to a conventional 80x24 rather than 0x0. The real size
-	// arrives as a WindowSizeMsg and replaces this immediately - but a
-	// list created at zero renders nothing at all, so a terminal that is
-	// slow to report its size shows an empty screen first, and one that
-	// never reports shows an empty screen forever.
-	l := list.New(items, list.NewDefaultDelegate(), defaultWidth, defaultHeight)
+	// Zero size, as the upstream list examples do. Bubble Tea reads the
+	// terminal size at startup and delivers a WindowSizeMsg BEFORE the
+	// first render, so the real dimensions always arrive before anything
+	// is drawn and a placeholder size would only ever be wrong.
+	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "{{ .Name }}"
 
 	// q is handled in Update, so the list does not know about it; without
@@ -70,7 +64,7 @@ func newModel() model {
 		}
 	}
 
-	return model{list: l, width: defaultWidth, height: defaultHeight}
+	return model{list: l}
 }
 
 // Init runs once, before the first render. Return a tea.Cmd here to do
@@ -85,8 +79,10 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.list.SetSize(msg.Width, msg.Height)
+		// Subtract the frame appStyle adds, so the list fills exactly
+		// what is left rather than overflowing by the padding.
+		h, v := appStyle.GetFrameSize()
+		m.list.SetSize(msg.Width-h, msg.Height-v)
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -111,12 +107,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the current state. Pure: no state changes, no I/O.
+//
+// No help line is added here: list.Model draws its own, generated from
+// its real keybindings, and a second hand-written one beside it says the
+// same things twice and drifts the moment a binding changes.
 func (m model) View() tea.View {
-	// No help line here: list.Model draws its own, generated from its
-	// real keybindings, and a second hand-written one beside it says the
-	// same things twice and drifts the moment a binding changes. `q` is
-	// added to that help in newModel instead, via AdditionalShortHelpKeys.
-	v := tea.NewView(m.list.View())
+	v := tea.NewView(appStyle.Render(m.list.View()))
 	// Draw on the terminal's alternate buffer, so the shell's scrollback
 	// is untouched and whatever the user had on screen comes back when
 	// the program exits. In v2 this is a field on the View rather than a

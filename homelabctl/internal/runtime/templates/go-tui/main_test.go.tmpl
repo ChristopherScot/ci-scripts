@@ -10,23 +10,36 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
-// A list created at zero renders nothing, so the first frame would be
-// blank until the terminal reported its size - and stay blank forever if
-// it never did.
-func TestFirstFrameDrawsBeforeAnyResize(t *testing.T) {
-	if content := newModel().View().Content; !strings.Contains(content, "first") {
-		t.Errorf("nothing rendered before the first WindowSizeMsg:\n%q", content)
+// The list is sized from the window minus whatever frame appStyle adds.
+//
+// Getting this wrong is not subtle but it is easy: hardcode the padding
+// here and in the style, change one, and the list runs a row past the
+// bottom of the terminal with its own help line scrolled off. Deriving
+// it from GetFrameSize keeps the two in step.
+func TestListIsSizedToTheWindowMinusItsFrame(t *testing.T) {
+	m, _ := newModel().Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	h, v := appStyle.GetFrameSize()
+	if got, want := m.(model).list.Width(), 100-h; got != want {
+		t.Errorf("list width = %d, want %d (window 100 minus frame %d)", got, want, h)
+	}
+	if got, want := m.(model).list.Height(), 40-v; got != want {
+		t.Errorf("list height = %d, want %d (window 40 minus frame %d)", got, want, v)
 	}
 }
 
-// The window size replaces the default once it arrives.
-func TestResizeTakesTheWholeWindow(t *testing.T) {
-	m, _ := newModel().Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+// Everything the list draws has to fit the width it was given, or it
+// overflows whatever is beside it.
+func TestRenderedListStaysWithinItsWidth(t *testing.T) {
+	m, _ := newModel().Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 
-	if got := m.(model).list.Height(); got != 40 {
-		t.Errorf("list height = %d, want 40", got)
+	for i, line := range strings.Split(m.(model).list.View(), "\n") {
+		if w := lipgloss.Width(line); w > m.(model).list.Width() {
+			t.Errorf("line %d is %d wide, list width is %d", i, w, m.(model).list.Width())
+		}
 	}
 }
 
