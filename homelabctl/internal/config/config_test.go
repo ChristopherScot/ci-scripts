@@ -279,3 +279,24 @@ func TestVaultPathMayNameAnotherService(t *testing.T) {
 		}
 	}
 }
+
+// A malformed prefix produces an Ingress nginx accepts and routes wrongly,
+// which looks like a bug in the service rather than in its config.
+func TestIngressPathMustBeAUsablePrefix(t *testing.T) {
+	for _, bad := range []string{"api", "/api/", "/a//b"} {
+		c := Defaults()
+		c.Name, c.Team, c.Runtime = "svc", "t", "go-service"
+		c.Ingress = &Ingress{Hosts: IngressHosts("svc.example.com"), Path: bad}
+		if err := c.Complete(); err == nil {
+			t.Errorf("ingress.path %q was accepted", bad)
+		}
+	}
+	for _, ok := range []string{"", "/", "/api", "/api/v2"} {
+		c := Defaults()
+		c.Name, c.Team, c.Runtime = "svc", "t", "go-service"
+		c.Ingress = &Ingress{Hosts: IngressHosts("svc.example.com"), Path: ok}
+		if err := c.Complete(); err != nil {
+			t.Errorf("ingress.path %q was refused: %v", ok, err)
+		}
+	}
+}

@@ -359,6 +359,22 @@ type Ingress struct {
 	// Authelia puts forward-auth in front. Not available for public hosts
 	// reached off-LAN, since the auth host resolves internally only.
 	Authelia bool `yaml:"authelia,omitempty"`
+
+	// Path is the URL prefix this service answers on, "/" by default.
+	//
+	// Setting it lets several services share one hostname: an API on
+	// /api beside a UI on /, routed by nginx rather than by DNS. The
+	// prefix is STRIPPED before the request reaches the service, so the
+	// service's own routes stay unprefixed and it does not need to know
+	// where it is mounted - a service on /api serving /pokemon is
+	// reached at /api/pokemon.
+	//
+	// Nothing here checks that two services claiming one host declare
+	// different paths: they are separate config files, and this tool
+	// renders one service at a time. Overlapping prefixes are resolved
+	// by nginx's longest-match, so the more specific one wins rather
+	// than one silently shadowing the other.
+	Path string `yaml:"path,omitempty"`
 }
 
 type Probes struct {
@@ -597,6 +613,20 @@ func (c Config) Validate() error {
 	if c.Ingress != nil {
 		if len(c.Ingress.Hosts) == 0 {
 			add("ingress.hosts must list at least one hostname")
+		}
+		if p := c.Ingress.Path; p != "" {
+			// A prefix that does not start with / is not a path, and a
+			// trailing slash makes the rewrite emit a doubled one. Both
+			// produce an Ingress nginx accepts and routes wrongly, which
+			// is the kind of failure that looks like the service.
+			switch {
+			case !strings.HasPrefix(p, "/"):
+				add("ingress.path %q must start with /", p)
+			case p != "/" && strings.HasSuffix(p, "/"):
+				add("ingress.path %q must not end with / (use %q)", p, strings.TrimRight(p, "/"))
+			case strings.Contains(p, "//"):
+				add("ingress.path %q has an empty segment", p)
+			}
 		}
 		seen := map[string]bool{}
 		certified := 0

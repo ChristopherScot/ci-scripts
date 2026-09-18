@@ -687,6 +687,16 @@ metadata:
 		// resource, so the certified names keep their redirect.
 		b.WriteString("    nginx.ingress.kubernetes.io/ssl-redirect: \"false\"\n")
 	}
+	if prefix := c.Ingress.Path; prefix != "" && prefix != "/" {
+		// Strip the prefix before the request reaches the service, so a
+		// service mounted on /api serves its own /pokemon unchanged and
+		// does not need to know where it lives. The capture group in the
+		// rule's path is what $2 refers to; use-regex is what makes
+		// nginx read that path as a pattern rather than a literal.
+		b.WriteString(`    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+`)
+	}
 	if c.Ingress.Authelia {
 		b.WriteString(`    nginx.ingress.kubernetes.io/auth-url: "http://authelia.authelia.svc.cluster.local/api/verify"
     nginx.ingress.kubernetes.io/auth-signin: "https://auth.home.chrisscotmartin.com/?rd=$scheme://$host$escaped_request_uri"
@@ -702,18 +712,26 @@ metadata:
 			strings.Join(names, ", "), c.Name)
 	}
 	b.WriteString("  rules:\n")
+	// The rule path. "/" is the ordinary case and stays a plain Prefix
+	// match; a mounted service needs the regex form so rewrite-target has
+	// a $2 to put back. Written as <prefix>(/|$)(.*) rather than
+	// <prefix>(.*) so /apifoo does not match a service mounted on /api.
+	rulePath, pathType := "/", "Prefix"
+	if prefix := c.Ingress.Path; prefix != "" && prefix != "/" {
+		rulePath, pathType = prefix+"(/|$)(.*)", "ImplementationSpecific"
+	}
 	for _, h := range hosts {
 		fmt.Fprintf(&b, `    - host: %s
       http:
         paths:
-          - path: /
-            pathType: Prefix
+          - path: %s
+            pathType: %s
             backend:
               service:
                 name: %s
                 port:
                   number: 80
-`, h.Name, c.Name)
+`, h.Name, rulePath, pathType, c.Name)
 	}
 	return b.String()
 }

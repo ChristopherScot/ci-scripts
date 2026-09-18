@@ -135,7 +135,8 @@ const Schema = `{
           }
         },
         "public": { "type": "boolean", "description": "Route via the internet-facing controller instead of the LAN one." },
-        "authelia": { "type": "boolean", "description": "Put Authelia forward-auth in front. LAN-only; cannot be combined with public." }
+        "authelia": { "type": "boolean", "description": "Put Authelia forward-auth in front. LAN-only; cannot be combined with public." },
+        "path": { "type": "string", "pattern": "^/", "description": "URL prefix this service answers on, default /. Lets several services share one hostname; the prefix is stripped before the request reaches the service." }
       }
     },
     "probes": {

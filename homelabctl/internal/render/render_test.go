@@ -486,3 +486,60 @@ func TestAppEntryCarriesTheGeneratorsParameters(t *testing.T) {
 		t.Errorf("image %q carries a tag; the template appends :latest", got["image"])
 	}
 }
+
+// A service can be mounted under a prefix so several share one hostname.
+// The prefix is stripped before the request reaches the service, which is
+// what lets the service keep its own unprefixed routes.
+func TestIngressPathMountsTheServiceUnderAPrefix(t *testing.T) {
+	c := base()
+	c.Ingress = &config.Ingress{
+		Hosts: config.IngressHosts("pokemon.example.com"),
+		Path:  "/api",
+	}
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if o.Path == "ingress.yaml" {
+			body = o.Body
+		}
+	}
+	if body == "" {
+		t.Fatal("no ingress rendered")
+	}
+	// The trailing (/|$) is what stops /apifoo matching a service mounted
+	// on /api - the reason this is a regex rather than "/api(.*)".
+	if !strings.Contains(body, "path: /api(/|$)(.*)") {
+		t.Errorf("rule path does not guard the prefix boundary:\n%s", body)
+	}
+	// rewrite-target without use-regex silently does nothing, and the
+	// capture group without rewrite-target routes the prefix through to
+	// the service. Both are needed or neither works.
+	for _, want := range []string{
+		`nginx.ingress.kubernetes.io/use-regex: "true"`,
+		"nginx.ingress.kubernetes.io/rewrite-target: /$2",
+		"pathType: ImplementationSpecific",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("ingress missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// The ordinary case stays a plain prefix match. A regex path and a
+// rewrite on every service would be a behaviour change for all of them
+// to serve one that wanted a prefix.
+func TestIngressWithoutAPathIsAPlainPrefix(t *testing.T) {
+	c := base()
+	c.Ingress = &config.Ingress{Hosts: config.IngressHosts("svc.example.com")}
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if o.Path == "ingress.yaml" {
+			body = o.Body
+		}
+	}
+	if !strings.Contains(body, "path: /\n") || !strings.Contains(body, "pathType: Prefix") {
+		t.Errorf("default ingress is not a plain prefix match:\n%s", body)
+	}
+	if strings.Contains(body, "rewrite-target") {
+		t.Errorf("a service with no ingress.path should not rewrite:\n%s", body)
+	}
+}

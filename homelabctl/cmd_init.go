@@ -384,22 +384,44 @@ func setupRemote(o initOpts) (string, error) {
 	}
 	slug := o.owner + "/" + repo
 
-	if o.parentRepo == "" {
-		if err := exec.Command("gh", "repo", "view", slug).Run(); err != nil {
-			vis := "--public"
-			if o.private {
-				vis = "--private"
-			}
-			fmt.Printf("creating github.com/%s\n", slug)
-			cmd := exec.Command("gh", "repo", "create", slug, vis,
-				"--description", fmt.Sprintf("%s service", o.name))
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				return "", fmt.Errorf("gh repo create: %w", err)
-			}
-		} else {
-			fmt.Printf("github.com/%s already exists, reusing it\n", slug)
+	// Already standing in the monorepo: use it rather than cloning a
+	// second copy inside itself. Adding the second and later services is
+	// the ordinary case, and doing it from inside the repo is the obvious
+	// way to try - it used to attempt `gh repo clone pokemon pokemon`
+	// from the repo root and fail on the existing directory.
+	//
+	// repoRoot rather than the working directory's name, so this is right
+	// from services/pokedex as well as from the root.
+	if o.parentRepo != "" {
+		if root := repoRoot(); root != "" && filepath.Base(root) == o.parentRepo {
+			fmt.Printf("already inside %s, using it\n", root)
+			return root, nil
 		}
+	}
+
+	// Created whether or not this is a monorepo. --parent-repo used to
+	// skip this on the assumption that the parent already existed, which
+	// is true for every service but the FIRST one: bootstrapping a new
+	// monorepo failed at the clone below with gh's "repository not
+	// found", and the only way through was to create the repo by hand -
+	// which is the thing this command exists to avoid.
+	if err := exec.Command("gh", "repo", "view", slug).Run(); err != nil {
+		vis := "--public"
+		if o.private {
+			vis = "--private"
+		}
+		fmt.Printf("creating github.com/%s\n", slug)
+		desc := fmt.Sprintf("%s service", o.name)
+		if o.parentRepo != "" {
+			desc = fmt.Sprintf("%s services", o.parentRepo)
+		}
+		cmd := exec.Command("gh", "repo", "create", slug, vis, "--description", desc)
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("gh repo create: %w", err)
+		}
+	} else {
+		fmt.Printf("github.com/%s already exists, reusing it\n", slug)
 	}
 
 	if _, err := os.Stat(repo); err == nil {
@@ -411,6 +433,20 @@ func setupRemote(o initOpts) (string, error) {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("gh repo clone: %w", err)
+	}
+
+	// A repo created a moment ago has no commits, so the clone lands on
+	// an unborn HEAD named by whatever init.defaultBranch happens to be
+	// on this machine. Every generated workflow triggers on `main`, so a
+	// machine still defaulting to `master` produces a repo whose CI never
+	// runs - and nothing says so, because a workflow that does not match
+	// its branch is not an error.
+	if err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Run(); err != nil {
+		b := exec.Command("git", "-C", repo, "checkout", "-q", "-B", "main")
+		b.Stderr = os.Stderr
+		if err := b.Run(); err != nil {
+			return "", fmt.Errorf("setting the initial branch to main: %w", err)
+		}
 	}
 	return repo, nil
 }
