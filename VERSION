@@ -1,3 +1,3 @@
-v1.1.3
+v1.1.4
 
-v1.1.3 regen actually regenerates, and fails when generation fails
+v1.1.4 main.go says which files are yours, for services and CLIs

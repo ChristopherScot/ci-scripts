@@ -1,6 +1,25 @@
 // {{ .Name }}
 package main
 
+// THIS WHOLE REPO IS YOURS. A CLI has no config.yaml, so `regen`,
+// `render`, `check` and `vault` do not apply to it - `init` scaffolded
+// these files once and nothing rewrites any of them. Edit freely.
+//
+// Two couplings survive that, and neither is checked at build time:
+//
+//   - VERSION drives releases. CI publishes only when its first line
+//     changes on main, tagging what it says. Bump it in the commit that
+//     should ship; a change without one builds and releases nothing.
+//   - update.go downloads `{{ .Name }}_<os>_<arch>.tar.gz` from the
+//     latest GitHub release. CI builds assets with exactly that name.
+//     Rename either side and self-update fails against a release that
+//     looks fine on GitHub - so change both together, or neither.
+//
+// Because nothing regenerates this, a later convention change in
+// homelabctl will not reach it. That is the trade for the repo being
+// yours: `init` is a starting point, not a template you stay attached
+// to.
+
 import (
 	"fmt"
 	"os"

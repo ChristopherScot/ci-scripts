@@ -920,3 +920,43 @@ func TestMainDocumentsWhatItOwns(t *testing.T) {
 		t.Error("specless main.go claims api/ and clients/, which it does not have")
 	}
 }
+
+// A CLI's main.go documents that the whole repo is the author's, and
+// names the two couplings that outlive that: VERSION driving releases,
+// and the release asset name update.go downloads.
+func TestCLIMainDocumentsItsCouplings(t *testing.T) {
+	r, err := Get("go-cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := r.Artifacts(testParams())
+
+	var mainGo, updateGo string
+	for _, f := range a.Files {
+		switch f.Path {
+		case "main.go":
+			mainGo = f.Body
+		case "update.go":
+			updateGo = f.Body
+		}
+	}
+	for _, want := range []string{"THIS WHOLE REPO IS YOURS", "VERSION", "update.go"} {
+		if !strings.Contains(mainGo, want) {
+			t.Errorf("go-cli main.go does not mention %q", want)
+		}
+	}
+	// It must not claim the service-only machinery applies.
+	if strings.Contains(mainGo, "deploy/*.yaml") {
+		t.Error("go-cli main.go names deploy/, which a CLI does not have")
+	}
+
+	// The documented asset name has to be the one both sides use: rename
+	// either and self-update fails against a release that looks fine.
+	asset := testParams().Name + "_%s_%s.tar.gz"
+	if !strings.Contains(updateGo, asset) {
+		t.Errorf("update.go does not download %q", asset)
+	}
+	if !strings.Contains(a.Workflow, testParams().Name+"_${GOOS}_${GOARCH}.tar.gz") {
+		t.Error("CI does not build the asset name update.go downloads")
+	}
+}
