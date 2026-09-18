@@ -6,15 +6,23 @@ name: {{ .Name }}
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: [main]{{ if .PathFilter }}
+    paths: ['{{ .PathFilter }}/**', '.github/workflows/{{ .Name }}.yaml']{{ end }}
+  pull_request:{{ if .PathFilter }}
+    paths: ['{{ .PathFilter }}/**']{{ end }}
   workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: read{{ if .PathFilter }}
+    # Everything below runs in the service directory: in a monorepo the
+    # CLI's go.mod is not at the repo root, and `go test ./...` from the
+    # root either finds nothing or tests a sibling service.
+    defaults:
+      run:
+        working-directory: {{ .PathFilter }}{{ end }}
     steps:
       - uses: actions/checkout@v4
 {{ .BuildSteps }}
@@ -30,10 +38,15 @@ jobs:
         with:
           fetch-depth: 2
 
+      # grep -qx against the full path. A bare `VERSION` never matches
+      # in a monorepo, where the file is services/<name>/VERSION - so the
+      # gate stayed closed forever and no release could be cut, silently,
+      # because a gate that does not open looks the same as a commit that
+      # did not bump the version.
       - name: Release only on a VERSION change
         id: gate
         run: |
-          if git diff --name-only HEAD~1 HEAD | grep -qx VERSION; then
+          if git diff --name-only HEAD~1 HEAD | grep -qx '{{ if .PathFilter }}{{ .PathFilter }}/{{ end }}VERSION'; then
             echo "go=true" >> $GITHUB_OUTPUT
           else
             echo "go=false" >> $GITHUB_OUTPUT
@@ -42,20 +55,22 @@ jobs:
       - uses: actions/setup-go@v5
         if: steps.gate.outputs.go == 'true'
         with:
-          go-version-file: go.mod
+          go-version-file: {{ if .PathFilter }}{{ .PathFilter }}/{{ end }}go.mod
           cache: true
+          cache-dependency-path: {{ if .PathFilter }}{{ .PathFilter }}/{{ end }}go.sum
 
       - name: Read version
         if: steps.gate.outputs.go == 'true'
         id: v
-        run: echo "version=$(head -n1 VERSION)" >> $GITHUB_OUTPUT
+        run: echo "version=$(head -n1 {{ if .PathFilter }}{{ .PathFilter }}/{{ end }}VERSION)" >> $GITHUB_OUTPUT
 
       # Asset names must match what `{{ .Name }} update` looks for:
       # {{ .Name }}_<goos>_<goarch>.tar.gz containing the bare binary.
       # Version is injected here; without it a released binary reports
       # "dev" and refuses to update itself.
       - name: Cross-compile
-        if: steps.gate.outputs.go == 'true'
+        if: steps.gate.outputs.go == 'true'{{ if .PathFilter }}
+        working-directory: {{ .PathFilter }}{{ end }}
         run: |
           VERSION="${{ "{{" }} steps.v.outputs.version {{ "}}" }}"
           LDFLAGS="-s -w -X main.Version=$VERSION"
@@ -72,5 +87,5 @@ jobs:
         with:
           tag_name: ${{ "{{" }} steps.v.outputs.version {{ "}}" }}
           files: |
-            {{ .Name }}_*.tar.gz
-            checksums.txt
+            {{ if .PathFilter }}{{ .PathFilter }}/{{ end }}{{ .Name }}_*.tar.gz
+            {{ if .PathFilter }}{{ .PathFilter }}/{{ end }}checksums.txt

@@ -128,6 +128,58 @@ func TestMonorepoWorkflowIsPathFiltered(t *testing.T) {
 	}
 }
 
+// The same for go-cli, which had NONE of this: a monorepo CLI rebuilt on
+// every unrelated push, ran `go test ./...` from the repo root where its
+// go.mod is not, and - worst - gated its release on `grep -qx VERSION`
+// against a file at services/<name>/VERSION. That match can never
+// succeed, so no monorepo CLI could ever publish a release, and a gate
+// that stays shut looks exactly like a commit that did not bump the
+// version.
+func TestMonorepoCLIWorkflowIsScopedToItsDirectory(t *testing.T) {
+	r, _ := Get("go-cli")
+	p := testParams()
+	p.PathFilter = "services/svc"
+	a := r.Artifacts(p)
+
+	for _, want := range []string{
+		"services/svc/**",                 // path filter
+		"working-directory: services/svc", // tests and build run there
+		"grep -qx 'services/svc/VERSION'", // the release gate can open
+		"go-version-file: services/svc/go.mod",
+		"services/svc/checksums.txt", // assets are found where built
+	} {
+		if !strings.Contains(a.Workflow, want) {
+			t.Errorf("monorepo CLI workflow missing %q", want)
+		}
+	}
+}
+
+// A dedicated repo must not gain any of that: the CLI is at the root, and
+// a working-directory or a prefixed VERSION path would point at nothing.
+func TestSingleRepoCLIWorkflowStaysAtTheRoot(t *testing.T) {
+	r, _ := Get("go-cli")
+	a := r.Artifacts(testParams()) // no PathFilter
+
+	if !strings.Contains(a.Workflow, "grep -qx 'VERSION'") {
+		t.Error("single-repo CLI should gate on a bare VERSION")
+	}
+	// Checked against non-comment lines only: the workflow explains the
+	// monorepo case in a comment, and matching that would be testing the
+	// prose rather than the YAML.
+	var live []string
+	for _, l := range strings.Split(a.Workflow, "\n") {
+		if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "#") {
+			live = append(live, l)
+		}
+	}
+	yaml := strings.Join(live, "\n")
+	for _, unwanted := range []string{"working-directory:", "services/"} {
+		if strings.Contains(yaml, unwanted) {
+			t.Errorf("single-repo CLI workflow should not contain %q", unwanted)
+		}
+	}
+}
+
 func TestGetUnknownRuntimeListsAvailable(t *testing.T) {
 	_, err := Get("cobol")
 	if err == nil {
