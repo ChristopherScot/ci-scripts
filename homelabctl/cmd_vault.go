@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
@@ -81,7 +82,7 @@ func serviceRole(c *config.Config) vault.Role {
 		ServiceAccounts: []string{c.ServiceAccountName()},
 		Namespaces:      []string{c.Namespace},
 		Policies:        []string{c.VaultPolicyName()},
-		TTL:             "1h",
+		TTLSeconds:      3600,
 	}
 }
 
@@ -102,7 +103,7 @@ vault write auth/kubernetes/role/%s \
   ttl=%s
 `, c.Name, c.VaultPolicyName(), vaultPolicy(c), c.VaultRoleName(),
 		strings.Join(r.ServiceAccounts, ","), strings.Join(r.Namespaces, ","),
-		strings.Join(r.Policies, ","), r.TTL)
+		strings.Join(r.Policies, ","), fmt.Sprintf("%ds", r.TTLSeconds))
 }
 
 // applyVault writes the policy and role over Vault's HTTP API. Both are
@@ -124,13 +125,46 @@ func applyVault(c *config.Config) error {
 	}
 	fmt.Printf("wrote policy %s\n", c.VaultPolicyName())
 
-	if err := cl.WriteRole(ctx, c.VaultRoleName(), serviceRole(c)); err != nil {
+	want := serviceRole(c)
+	if err := cl.WriteRole(ctx, c.VaultRoleName(), want); err != nil {
 		return err
 	}
+
+	// Read it back rather than trusting the write. Vault accepts a role
+	// and normalises it - a TTL sent as a duration comes back as
+	// seconds - so "no error" does not mean "what the config asked for".
+	// This is also the only thing that would notice a policy name the
+	// role does not actually carry, which is how a pod ends up
+	// authenticating successfully and still being denied every read.
+	got, err := cl.ReadRole(ctx, c.VaultRoleName())
+	if err != nil {
+		return fmt.Errorf("role was written but could not be read back: %w", err)
+	}
+	if diff := roleDiff(want, *got); diff != "" {
+		return fmt.Errorf("role %s does not match the config after writing:\n%s",
+			c.VaultRoleName(), diff)
+	}
+
 	fmt.Printf("wrote role auth/kubernetes/role/%s (sa=%s ns=%s) at %s\n",
-		c.VaultRoleName(), c.ServiceAccountName(), c.Namespace, vault.Address())
+		c.VaultRoleName(), c.ServiceAccountName(), c.Namespace, cl.Address())
+	fmt.Println("verified: reads back as written")
 	return nil
 }
 
-// vaultToken reads the token to authenticate with, preferring the
-// environment so callers can supply a narrower one than root.
+// roleDiff reports how a role in Vault differs from what the config
+// asks for, as lines a person can act on. Empty means they agree.
+func roleDiff(want, got vault.Role) string {
+	var b strings.Builder
+	cmp := func(field string, w, g []string) {
+		if !slices.Equal(w, g) {
+			fmt.Fprintf(&b, "  %s: want %v, got %v\n", field, w, g)
+		}
+	}
+	cmp("bound_service_account_names", want.ServiceAccounts, got.ServiceAccounts)
+	cmp("bound_service_account_namespaces", want.Namespaces, got.Namespaces)
+	cmp("token_policies", want.Policies, got.Policies)
+	if want.TTLSeconds != got.TTLSeconds {
+		fmt.Fprintf(&b, "  token_ttl: want %ds, got %ds\n", want.TTLSeconds, got.TTLSeconds)
+	}
+	return b.String()
+}

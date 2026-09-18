@@ -14,10 +14,11 @@ import (
 // In order:
 //
 //   - VAULT_TOKEN, for CI and scripts.
+//   - VAULT_TOKEN_FILE, for a token mounted somewhere else. Explicit
+//     beats ambient, so this is checked before the file below.
 //   - ~/.vault-token, which `vault login` writes. This is the one that
 //     matters for a human: they log in once, however their Vault is
 //     configured, and every tool picks it up.
-//   - VAULT_TOKEN_FILE, for a token mounted somewhere else.
 //
 // It deliberately shells out to nothing. This used to run
 // `op read op://Employee/homelab-vault-root/password`, which hardcoded

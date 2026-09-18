@@ -13,9 +13,12 @@ package vault
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +29,8 @@ import (
 // Client is a Vault connection scoped to what this tool does: read and
 // write the Kubernetes auth roles and ACL policies that a service needs.
 type Client struct {
-	api *vault.Client
+	api  *vault.Client
+	addr string
 }
 
 // ErrNoAddress is returned when VAULT_ADDR is unset. There is
@@ -58,20 +62,31 @@ func New(token string) (*Client, error) {
 			return nil, fmt.Errorf("setting vault token: %w", err)
 		}
 	}
-	return &Client{api: api}, nil
+	return &Client{api: api, addr: addr}, nil
 }
 
 // Address is where this client is pointed, for messages that should say
 // which Vault they mean.
-func Address() string { return strings.TrimSpace(os.Getenv("VAULT_ADDR")) }
+//
+// Read from the struct, not from the environment: a free function would
+// re-read VAULT_ADDR, so if it changed after New the success message
+// would name a Vault the write never touched - the failure looking like
+// success that this package exists to avoid.
+func (c *Client) Address() string { return c.addr }
 
 // Role is a Kubernetes auth role, in the terms this tool cares about:
 // which ServiceAccount, in which namespace, may assume which policies.
+//
+// TTLSeconds rather than a duration string: Vault accepts "1h" on write
+// but returns 3600 on read, so a Role that round-trips has to hold the
+// form both directions agree on. Storing "1h" made ReadRole(WriteRole(r))
+// never equal r, which would have made any drift check report a change
+// that had not happened.
 type Role struct {
 	ServiceAccounts []string
 	Namespaces      []string
 	Policies        []string
-	TTL             string
+	TTLSeconds      int
 }
 
 // ReadRole returns the named Kubernetes auth role, or ErrNotFound.
@@ -83,11 +98,24 @@ func (c *Client) ReadRole(ctx context.Context, name string) (*Role, error) {
 		}
 		return nil, fmt.Errorf("reading role %s: %w", name, err)
 	}
-	return &Role{
-		ServiceAccounts: strs(resp.Data["bound_service_account_names"]),
-		Namespaces:      strs(resp.Data["bound_service_account_namespaces"]),
-		Policies:        strs(resp.Data["token_policies"]),
-	}, nil
+	r := &Role{}
+	if r.ServiceAccounts, err = strs(resp.Data["bound_service_account_names"]); err != nil {
+		return nil, fmt.Errorf("role %s: bound_service_account_names: %w", name, err)
+	}
+	if r.Namespaces, err = strs(resp.Data["bound_service_account_namespaces"]); err != nil {
+		return nil, fmt.Errorf("role %s: bound_service_account_namespaces: %w", name, err)
+	}
+	if r.Policies, err = strs(resp.Data["token_policies"]); err != nil {
+		return nil, fmt.Errorf("role %s: token_policies: %w", name, err)
+	}
+	if n, ok := resp.Data["token_ttl"].(json.Number); ok {
+		i, err := n.Int64()
+		if err != nil {
+			return nil, fmt.Errorf("role %s: token_ttl %q: %w", name, n, err)
+		}
+		r.TTLSeconds = int(i)
+	}
+	return r, nil
 }
 
 // WriteRole creates or replaces a Kubernetes auth role.
@@ -97,7 +125,7 @@ func (c *Client) WriteRole(ctx context.Context, name string, r Role) error {
 			BoundServiceAccountNames:      r.ServiceAccounts,
 			BoundServiceAccountNamespaces: r.Namespaces,
 			TokenPolicies:                 r.Policies,
-			TokenTtl:                      r.TTL,
+			TokenTtl:                      strconv.Itoa(r.TTLSeconds) + "s",
 		})
 	if err != nil {
 		return fmt.Errorf("writing role %s: %w", name, err)
@@ -129,22 +157,35 @@ func (c *Client) WritePolicy(ctx context.Context, name, document string) error {
 
 // isNotFound reports whether Vault answered 404. The typed client keeps
 // the status code, which is the distinction a shell exit status lost.
+//
+// The library's own helper rather than a hand-rolled errors.As: it also
+// classifies a 404 that arrives via a redirect, which a direct type
+// assertion on *ResponseError misses.
 func isNotFound(err error) bool {
-	var re *vault.ResponseError
-	return errors.As(err, &re) && re.StatusCode == 404
+	return vault.IsErrorStatus(err, http.StatusNotFound)
 }
 
-// strs coerces Vault's untyped JSON arrays into a string slice.
-func strs(v any) []string {
+// strs converts one of Vault's untyped JSON arrays into a string slice.
+//
+// It errors rather than skipping what it does not understand. Silently
+// yielding nil made "this role binds no namespaces" indistinguishable
+// from "Vault returned a shape we did not expect", and a drift check
+// built on that would report a role as unbound - the unsafe direction.
+func strs(v any) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
 	items, ok := v.([]any)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("expected a list, got %T", v)
 	}
 	out := make([]string, 0, len(items))
 	for _, i := range items {
-		if s, ok := i.(string); ok {
-			out = append(out, s)
+		s, ok := i.(string)
+		if !ok {
+			return nil, fmt.Errorf("expected a list of strings, found %T", i)
 		}
+		out = append(out, s)
 	}
-	return out
+	return out, nil
 }
