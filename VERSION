@@ -1,3 +1,3 @@
 v1.1.6
 
-v1.1.6 drop the init flags that only restated a config field
+v1.1.6 drop the init flags that restated config; init and render agree on layout

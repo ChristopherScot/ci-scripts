@@ -48,9 +48,11 @@ func TestInitGeneratesEveryRuntime(t *testing.T) {
 				want = append(want, f.Path)
 			}
 			if a.Deployable {
+				// deploy/<name>/, the same layout `render --out deploy`
+				// writes, so the copy into the homelab repo is `cp -r`.
 				want = append(want, "Dockerfile", "config.yaml",
-					filepath.Join("deploy", "kustomization.yaml"),
-					filepath.Join("deploy", "deployment.yaml"))
+					filepath.Join("deploy", "svc", "kustomization.yaml"),
+					filepath.Join("deploy", "svc", "deployment.yaml"))
 			}
 			for _, f := range want {
 				if _, err := os.Stat(f); err != nil {
@@ -199,5 +201,42 @@ func TestWithoutForceExistingFilesSurvive(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(mine); string(got) != "// mine\n" {
 		t.Error("a re-run without --force clobbered an existing file")
+	}
+}
+
+// init and `render --out deploy` must agree on where manifests go.
+// init used to write them flat, so the first render moved every file -
+// and the next-steps text had to describe a rename ("copy deploy/*.yaml
+// into the homelab repo AS <name>/") instead of a copy.
+func TestInitWritesManifestsWhereRenderDoes(t *testing.T) {
+	dir := t.TempDir()
+	o := initOpts{
+		name: "svc", runtimeID: "go-service",
+		owner: "o", localOnly: true, yes: true, skipTidy: true,
+	}
+	c := config.Defaults()
+	c.Name, c.Team, c.Runtime = o.name, defaultTeam, o.runtimeID
+	c.Image = config.Image{Repository: "ghcr.io/o/svc"}
+	if err := c.Complete(); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := runtime.Get(o.runtimeID)
+	if err := setupLocal(o, &c, r, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nested under the service name, which is the directory the app
+	// occupies in the homelab repo - so the copy is `cp -r`.
+	if _, err := os.Stat(filepath.Join(dir, "deploy", "svc", "deployment.yaml")); err != nil {
+		t.Errorf("deploy/svc/deployment.yaml missing: %v", err)
+	}
+	// Not flat beside it.
+	if _, err := os.Stat(filepath.Join(dir, "deploy", "deployment.yaml")); err == nil {
+		t.Error("a manifest was written flat into deploy/, where render would not put it")
+	}
+	// The Argo Application stays at the top: it belongs to
+	// app-of-apps/, not to the service's own directory.
+	if _, err := os.Stat(filepath.Join(dir, "deploy", "_argocd-application.yaml")); err != nil {
+		t.Errorf("deploy/_argocd-application.yaml missing: %v", err)
 	}
 }

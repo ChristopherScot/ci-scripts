@@ -444,7 +444,13 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 			return err
 		}
 		for _, out := range manifests {
-			if err := put(filepath.Join("deploy", out.Path), out.Body); err != nil {
+			// deploy/<name>/, matching `render --out deploy`. Writing
+			// them flat meant the first render moved every file, and it
+			// forced the next-steps text to describe a rename: "copy
+			// deploy/*.yaml into the homelab repo AS <name>/". Nested,
+			// the copy is `cp -r` and the directory already has the name
+			// the app occupies in that repo.
+			if err := put(filepath.Join("deploy", c.Name, out.Path), out.Body); err != nil {
 				return err
 			}
 		}
@@ -513,8 +519,7 @@ func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 		}
 		fmt.Println("  - push to main; CI builds and pushes the image")
 	}
-	fmt.Printf("  - copy %s/deploy/*.yaml (except _argocd-application.yaml)\n", dir)
-	fmt.Printf("    into the homelab repo as %s/\n", o.name)
+	fmt.Printf("  - cp -r %s/deploy/%s into the homelab repo\n", dir, o.name)
 	fmt.Printf("  - copy %s/deploy/_argocd-application.yaml into\n", dir)
 	fmt.Printf("    homelab app-of-apps/apps/%s.yaml\n", o.name)
 	// The copy above is the step that reaches the cluster, and it is done
