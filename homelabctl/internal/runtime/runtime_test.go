@@ -1143,3 +1143,37 @@ func TestSetupActionsGetRepoRootPathsInAMonorepo(t *testing.T) {
 		}
 	}
 }
+
+// The TypeScript client publishes by OIDC trusted publishing, not with a
+// stored token.
+//
+// npm is retiring 2FA-bypass automation tokens: blocked from account
+// operations in August 2026, and from publishing entirely around January
+// 2027. A workflow built on NPM_TOKEN would stop working on a date
+// nobody here would be watching for.
+//
+// id-token: write is what lets the job request the OIDC token. Without
+// it npm publish fails to authenticate, and the failure reads like a
+// registry problem rather than a missing permission.
+func TestTypeScriptClientPublishesByOIDC(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := testParams()
+	p.Spec = true
+	wf := r.Artifacts(p).Workflow
+
+	for _, want := range []string{"id-token: write", "npm publish --provenance"} {
+		if !strings.Contains(wf, want) {
+			t.Errorf("workflow missing %q", want)
+		}
+	}
+	// A token would still work today, which is exactly why this asserts
+	// its absence: the thing that breaks in 2027 looks fine now.
+	for _, unwanted := range []string{"NPM_TOKEN", "NODE_AUTH_TOKEN"} {
+		if strings.Contains(wf, unwanted) {
+			t.Errorf("workflow uses %s; trusted publishing needs no stored credential", unwanted)
+		}
+	}
+}

@@ -118,6 +118,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Lets this job request an OIDC token, which is how npm trusted
+      # publishing authenticates. It grants no write access to anything
+      # here - the name reads alarming and is not.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -159,20 +163,29 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.spec.outputs.publish == 'true'
         with:
+          # 24 for npm >= 11.5.1, which trusted publishing requires.
           node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Publish the TypeScript client
         if: steps.spec.outputs.publish == 'true'
         working-directory: {{ if .PathFilter }}{{ .PathFilter }}/{{ end }}clients/ts
-        env:
-          # Set this in the repo's secrets. Without it the job fails here
-          # rather than silently shipping a Go tag whose TypeScript
-          # counterpart does not exist.
-          NODE_AUTH_TOKEN: ${{ "{{" }} secrets.NPM_TOKEN {{ "}}" }}
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error::NPM_TOKEN is not set; the TypeScript client cannot be published"
-            exit 1
-          fi
-          npm publish
+        # No token. npm trusted publishing authenticates this workflow by
+        # OIDC, so there is no long-lived credential in the repo's
+        # secrets to leak, rotate, or forget to rotate.
+        #
+        # It needs a one-time setup on npmjs.com, per package:
+        #   Packages > <package> > Settings > Trusted publishing
+        # naming this repository and this workflow file. Until that
+        # exists the step fails with an auth error, which is the right
+        # outcome - a Go tag whose TypeScript counterpart silently never
+        # shipped is worse.
+        #
+        # Automation tokens were the obvious alternative and are on the
+        # way out: npm blocks 2FA-bypass tokens from account operations
+        # from August 2026 and from publishing entirely around January
+        # 2027.
+        #
+        # --provenance records where the package was built. It is free
+        # here because OIDC already proves it.
+        run: npm publish --provenance
