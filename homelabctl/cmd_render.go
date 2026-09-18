@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -26,6 +27,10 @@ type renderOpts struct {
 
 	dryRun bool
 	force  bool
+	// register opens a PR adding this service to the GitOps repo, which
+	// is what makes Argo deploy it. A flag rather than automatic: a
+	// routine re-render should not propose a cluster change.
+	register bool
 }
 
 func renderCmd() *cobra.Command {
@@ -57,6 +62,8 @@ func renderCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.out, "out", "", "directory to write manifests into (default: deploy/ beside config.yaml)")
 	cmd.Flags().BoolVar(&o.dryRun, "dry-run", false, "check against the running service and write nothing")
 	cmd.Flags().BoolVar(&o.force, "force", false, "write even if the change would break the running service")
+	cmd.Flags().BoolVar(&o.register, "register", false,
+		"open a PR on the GitOps repo so Argo starts deploying this service")
 	return cmd
 }
 
@@ -113,6 +120,36 @@ func runRender(o renderOpts) error {
 			return fmt.Errorf("write %s: %w", p, err)
 		}
 		fmt.Println("wrote", p)
+	}
+
+	if o.register {
+		// The entry as just rendered, so the PR cannot propose something
+		// different from what is on disk.
+		var entry string
+		for _, out := range outs {
+			if out.Path == render.AppEntryFile {
+				entry = out.Body
+			}
+		}
+		if entry == "" {
+			return fmt.Errorf("nothing to register: this service renders no %s", render.AppEntryFile)
+		}
+		// A service Argo cannot fetch is worse than one it does not know
+		// about: the Application appears and then fails to sync, which
+		// reads as a broken service rather than an unpushed one.
+		if !strings.Contains(entry, `"repoURL"`) {
+			return fmt.Errorf("this service has no git remote yet, so Argo would have nowhere to fetch it from.\n" +
+				"  commit and push it first, then run `homelabctl render --register`")
+		}
+		url, err := openGitOpsPR(c.Name, entry)
+		if err != nil {
+			return err
+		}
+		if url == "" {
+			fmt.Printf("\n%s is already registered with Argo\n", c.Name)
+		} else {
+			fmt.Printf("\nopened %s\n  merge it and Argo starts deploying %s\n", url, c.Name)
+		}
 	}
 
 	return nil
