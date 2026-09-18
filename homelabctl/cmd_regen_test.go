@@ -104,3 +104,26 @@ func TestSpecVersionRequiresAVersion(t *testing.T) {
 		t.Error("accepted a spec with no info.version")
 	}
 }
+
+// regen has no --owner: it is given a service directory and nothing
+// else. The owner is the npm scope the TypeScript client publishes
+// under, so losing it renders "@/name-client", which npm rejects - at
+// publish time, long after regen reported success.
+func TestOwnerComesFromTheModulePath(t *testing.T) {
+	for _, tc := range []struct{ mod, want string }{
+		{"module github.com/acme/svc\n", "acme"},
+		{"module github.com/acme/mono/services/svc\n\ngo 1.22\n", "acme"},
+		{"module svc\n", ""}, // no owner to find
+		{"", ""},             // no go.mod at all
+	} {
+		dir := t.TempDir()
+		if tc.mod != "" {
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(tc.mod), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := ownerFromModule(dir); got != tc.want {
+			t.Errorf("ownerFromModule(%q) = %q, want %q", tc.mod, got, tc.want)
+		}
+	}
+}

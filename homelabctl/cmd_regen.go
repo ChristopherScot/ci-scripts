@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/runtime"
@@ -106,7 +107,11 @@ func runRegen(cfgPath string, checkOnly bool) error {
 	// Only SpecFiles: everything else the templates write is the
 	// author's to edit, and rewriting server.go or config.yaml here
 	// would discard their work.
-	params := artifactParams(c, "", "")
+	// The owner, read from go.mod rather than passed in. It is the npm
+	// scope the TypeScript client publishes under, so getting it wrong
+	// renders "@/name-client" - a package name npm rejects, discovered at
+	// publish time rather than here.
+	params := artifactParams(c, ownerFromModule(dir), "")
 	params.Spec = c.Spec
 	rendered := map[string]string{}
 	for _, f := range r.Artifacts(params).Files {
@@ -210,4 +215,32 @@ func setPackageVersion(b []byte, version string) ([]byte, bool, error) {
 	}
 	re := regexp.MustCompile(`("version"\s*:\s*")[^"]*(")`)
 	return re.ReplaceAll(b, []byte("${1}"+version+"${2}")), true, nil
+}
+
+// ownerFromModule reads the GitHub owner out of go.mod.
+//
+// init knows the owner because it asked; regen has only the service
+// directory, and the module path is where init recorded it:
+//
+//	module github.com/<owner>/<repo>[/services/<name>]
+//
+// Empty when it cannot be determined, which renders an unscoped package
+// name rather than a wrong one.
+func ownerFromModule(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "module ") {
+			continue
+		}
+		parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(line, "module ")), "/")
+		if len(parts) >= 2 {
+			return parts[1]
+		}
+		return ""
+	}
+	return ""
 }
