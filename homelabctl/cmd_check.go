@@ -31,6 +31,42 @@ func checkCmd() *cobra.Command {
 	}
 }
 
+// manifestDir finds where the manifests actually are.
+//
+// `render --out deploy` writes to deploy/<service>/, so that the
+// directory name matches the path the app occupies in the homelab repo
+// and the copy is a plain `cp -r`. check used to look in deploy/ itself
+// and reported a missing kustomization.yaml for every service - a
+// failure whose message named a real hazard that was not happening.
+//
+// One subdirectory holding a kustomization.yaml is that layout; anything
+// else is the flat one, and the caller's directory stands.
+func manifestDir(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return dir
+	}
+	var found string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, e.Name(), "kustomization.yaml")); err != nil {
+			continue
+		}
+		if found != "" {
+			// Several: ambiguous, so check what the caller named rather
+			// than guessing which service is the subject.
+			return dir
+		}
+		found = filepath.Join(dir, e.Name())
+	}
+	if found != "" {
+		return found
+	}
+	return dir
+}
+
 func runCheck(dir string) error {
 
 	var problems []string
@@ -39,6 +75,7 @@ func runCheck(dir string) error {
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("no %s/ directory", dir)
 	}
+	dir = manifestDir(dir)
 
 	kPath := filepath.Join(dir, "kustomization.yaml")
 	kb, err := os.ReadFile(kPath)
