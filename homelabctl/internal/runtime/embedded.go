@@ -18,6 +18,23 @@ import (
 //go:embed templates
 var templates embed.FS
 
+// tmpl is one template and what becomes of it.
+type tmpl struct {
+	// dst is the path it is written to in the generated service. A
+	// .tmpl suffix on the template name means it is rendered with
+	// Params; anything else is copied verbatim.
+	dst string
+
+	// specOnly marks a file that exists only for a spec-first service:
+	// openapi.yml, the generator config, and everything derived from
+	// them. A service with Spec false drops these.
+	specOnly bool
+
+	// plain replaces this template when the service has no spec. The
+	// handler, its tests and the workflow differ rather than disappear.
+	plain string
+}
+
 // embedded implements Runtime from a directory under templates/. A runtime
 // is then a data declaration plus its files; only genuinely different
 // behaviour needs Go code.
@@ -38,24 +55,16 @@ type embedded struct {
 	// upgrade moves dependencies forward; init only.
 	upgrade [][]string
 
-	// files maps a template file to the path it is written to in the
-	// generated service. A .tmpl suffix means it is rendered with Params;
-	// anything else is copied verbatim.
-	files map[string]string
-
-	// specFiles are entries of files that exist only for a spec-first
-	// service: openapi.yml, the generator config, and everything derived
-	// from them. Keyed by template name, so the map above stays the one
-	// list of what this runtime has.
+	// files maps a template file to what it becomes. One entry per
+	// template, carrying everything known about it.
 	//
-	// A service with Spec false drops these and substitutes specSwaps.
-	specFiles map[string]bool
-
-	// specSwaps replace a template when Spec is false. The three files
-	// that genuinely differ: the handler (hand-written, not generated),
-	// its tests (which otherwise assert generated-router behaviour), and
-	// the workflow's stale-generated-code check.
-	specSwaps map[string]string
+	// This was three maps - files, specFiles and specSwaps - keyed on
+	// the same template names and aligned by hand. A typo in one of the
+	// parallel keys was silent: SpecFiles() looked the name up in files,
+	// got "" for a key that was not there, and published an empty path
+	// through the Runtime interface for check and regen to act on.
+	// One map cannot disagree with itself.
+	files map[string]tmpl
 }
 
 func (e embedded) Name() string           { return e.name }
@@ -73,9 +82,11 @@ func (e embedded) Generate(p Params) [][]string {
 
 // SpecFiles are the destination paths that exist only with a spec.
 func (e embedded) SpecFiles() []string {
-	out := make([]string, 0, len(e.specFiles))
-	for src := range e.specFiles {
-		out = append(out, e.files[src])
+	var out []string
+	for _, t := range e.files {
+		if t.specOnly {
+			out = append(out, t.dst)
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -87,7 +98,7 @@ func (e embedded) Upgrade() [][]string { return e.upgrade }
 // this service has no spec, the original otherwise.
 func (e embedded) swap(src string, p Params) string {
 	if !p.Spec {
-		if alt, ok := e.specSwaps[src]; ok {
+		if alt := e.files[src].plain; alt != "" {
 			return alt
 		}
 	}
@@ -147,9 +158,15 @@ func (e embedded) renderFiles(p Params) []File {
 	// hide any ordering dependence that ever crept into the write loop
 	// behind an intermittent failure.
 	srcs := make([]string, 0, len(e.files))
-	for src := range e.files {
+	for src, t := range e.files {
+		// An empty dst is a template something else writes - the
+		// workflow, whose path setupLocal decides. It is in this map so
+		// its specless variant lives with every other file's.
+		if t.dst == "" {
+			continue
+		}
 		// Everything derived from a spec, when there is no spec.
-		if !p.Spec && e.specFiles[src] {
+		if !p.Spec && e.files[src].specOnly {
 			continue
 		}
 		srcs = append(srcs, src)
@@ -158,7 +175,7 @@ func (e embedded) renderFiles(p Params) []File {
 
 	out := make([]File, 0, len(e.files))
 	for _, src := range srcs {
-		dst := e.files[src]
+		dst := e.files[src].dst
 		src = e.swap(src, p)
 		body := e.read(src)
 		if strings.HasSuffix(src, ".tmpl") {

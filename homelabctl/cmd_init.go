@@ -148,6 +148,10 @@ func runInit(o initOpts) error {
 		}
 		dir = d
 	} else if o.parentRepo != "" {
+		// Only reached with --local-only. Normally init clones the repo
+		// into the working directory and uses that, so it runs OUTSIDE
+		// any repository and none of this applies.
+		//
 		// --parent-repo names the monorepo to add to, and the service
 		// belongs at its root regardless of where this was run.
 		//

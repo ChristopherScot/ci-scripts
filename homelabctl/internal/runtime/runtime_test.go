@@ -960,3 +960,45 @@ func TestCLIMainDocumentsItsCouplings(t *testing.T) {
 		t.Error("CI does not build the asset name update.go downloads")
 	}
 }
+
+// The three parallel maps this replaced - files, specFiles, specSwaps -
+// were keyed on the same template names and aligned by hand. A typo in
+// one was silent: SpecFiles() looked the name up in files, got "" for a
+// key that was not there, and published an empty path through the
+// Runtime interface for check and regen to act on.
+//
+// One map per template cannot disagree with itself, and this asserts
+// the property rather than the shape.
+func TestSpecFilesNeverPublishesAnEmptyPath(t *testing.T) {
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range r.SpecFiles() {
+			if p == "" {
+				t.Errorf("%s: SpecFiles contains an empty path", name)
+			}
+		}
+	}
+}
+
+// Every declared template has to exist, or it panics at render time in
+// front of someone creating a service. A dst of "" is the one legal
+// exception: the workflow, which Artifacts carries separately.
+func TestEveryDeclaredTemplateResolves(t *testing.T) {
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range r.Artifacts(testParams()).Files {
+			if f.Path == "" {
+				t.Errorf("%s: a file was rendered with no destination", name)
+			}
+			if f.Body == "" {
+				t.Errorf("%s: %s rendered empty", name, f.Path)
+			}
+		}
+	}
+}
