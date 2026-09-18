@@ -908,26 +908,33 @@ func TestSpecFirstServiceKeepsTheStalenessCheck(t *testing.T) {
 // and the build fails with "Cache export is not supported for the docker
 // driver" - on the first push of every service scaffolded this way,
 // after everything else has already passed.
+// EVERY runtime, not just go-service. This asserted go-service alone and
+// so missed node-service shipping a gha cache with no buildx for as long
+// as that runtime has existed: every node image build failed with "Cache
+// export is not supported for the docker driver", after the tests had
+// passed.
 func TestWorkflowsSetUpBuildxForTheirCache(t *testing.T) {
-	r, err := Get("go-service")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name string
-		spec bool
-	}{{"spec-first", true}, {"specless", false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := testParams()
-			p.Spec = tc.spec
-			wf := r.Artifacts(p).Workflow
-			if !strings.Contains(wf, "cache-to: type=gha") {
-				return // no cache, no buildx needed
-			}
-			if !strings.Contains(wf, "docker/setup-buildx-action") {
-				t.Errorf("uses a gha cache without setting up buildx; the build fails on the docker driver:\n%s", wf)
-			}
-		})
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			label string
+			spec  bool
+		}{{"spec-first", true}, {"specless", false}} {
+			t.Run(name+"/"+tc.label, func(t *testing.T) {
+				p := testParams()
+				p.Spec = tc.spec
+				wf := r.Artifacts(p).Workflow
+				if !strings.Contains(wf, "cache-to: type=gha") {
+					return // no cache, no buildx needed
+				}
+				if !strings.Contains(wf, "docker/setup-buildx-action") {
+					t.Errorf("uses a gha cache without setting up buildx; the build fails on the docker driver:\n%s", wf)
+				}
+			})
+		}
 	}
 }
 
