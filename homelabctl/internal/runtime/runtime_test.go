@@ -1287,3 +1287,52 @@ func TestNodeServiceLockfileIsWhereBothCIAndDockerLookForIt(t *testing.T) {
 		}
 	}
 }
+
+// A TUI is a CLI that draws: same release shape, one extra file, and a
+// root command that starts the interface instead of printing help.
+func TestGoTUIIsACLIThatDraws(t *testing.T) {
+	r, err := Get("go-tui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := testParams()
+	a := r.Artifacts(p)
+
+	// Not deployed: no Dockerfile, no manifests, no Argo app.
+	if a.Deployable {
+		t.Error("go-tui should not be deployable")
+	}
+	if a.Dockerfile != "" {
+		t.Error("go-tui should have no Dockerfile")
+	}
+
+	files := map[string]string{}
+	for _, f := range a.Files {
+		files[f.Path] = f.Body
+	}
+
+	// model.go is the file a TUI has and a CLI does not - it is where the
+	// interface lives and the one people edit.
+	if _, ok := files["model.go"]; !ok {
+		t.Error("no model.go")
+	}
+	// The same self-update machinery as go-cli, so `<name> update` works.
+	for _, want := range []string{"update.go", "completion.go", "VERSION"} {
+		if _, ok := files[want]; !ok {
+			t.Errorf("missing %s", want)
+		}
+	}
+
+	// v2, not v1. The APIs are incompatible and v1 is what nearly every
+	// example online uses, so pinning the import path is what keeps a
+	// generated repo from being pasted full of code that cannot compile.
+	if !strings.Contains(files["go.mod"], "charm.land/bubbletea/v2") {
+		t.Error("go.mod does not require bubbletea v2 at its charm.land path")
+	}
+
+	// The root command runs the program. Without this a bare invocation
+	// prints help, which is right for a CLI and useless for a TUI.
+	if !strings.Contains(files["main.go"], "RunE:") {
+		t.Error("root command has no RunE, so the bare command cannot start the TUI")
+	}
+}

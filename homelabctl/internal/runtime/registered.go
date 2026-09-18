@@ -82,6 +82,28 @@ func init() {
 		},
 	})
 
+	// A TUI is a CLI that draws. Same release shape - cross-compiled
+	// assets, VERSION-driven tags, the same self-update - so it shares
+	// go-cli's workflow and update command rather than restating them.
+	//
+	// What differs is one line in main.go: the root command has a RunE
+	// that starts the program, where a CLI's root prints help.
+	Register(embedded{
+		name: "go-tui", dir: "go-tui", deployable: false, hardened: false,
+		lock:    [][]string{{"go", "mod", "tidy"}},
+		upgrade: [][]string{{"go", "get", "-u", "./..."}},
+		files: map[string]tmpl{
+			"go.mod.tmpl":        {dst: "go.mod"},
+			"main.go.tmpl":       {dst: "main.go"},
+			"model.go.tmpl":      {dst: "model.go"},
+			"update.go.tmpl":     {dst: "update.go"},
+			"main_test.go.tmpl":  {dst: "main_test.go"},
+			"completion.go.tmpl": {dst: "completion.go"},
+			"VERSION.tmpl":       {dst: "VERSION"},
+			"gitignore.tmpl":     {dst: ".gitignore"},
+		},
+	})
+
 	Register(embedded{
 		name: "node-service", dir: "node-service", deployable: true, hardened: true,
 		// Generates package-lock.json, which the Dockerfile's `npm ci`

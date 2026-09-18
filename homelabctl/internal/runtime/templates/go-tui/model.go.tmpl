@@ -1,0 +1,126 @@
+package main
+
+// The interface itself. This is the file to edit.
+//
+// Bubble Tea is the Elm architecture: state lives in one struct, every
+// input arrives as a message, and Update returns the NEXT state rather
+// than mutating the current one. View renders whatever state it is given
+// and does nothing else - no I/O, no side effects. Work that blocks goes
+// in a tea.Cmd, which runs off the event loop and reports back as
+// another message.
+//
+// Note this is bubbletea v2, whose API differs from most examples
+// online: Init returns only a tea.Cmd, View returns a tea.View rather
+// than a string, and key presses arrive as tea.KeyPressMsg. v1 code will
+// not compile here.
+
+import (
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+)
+
+// item is one row. list.Item needs these three methods; FilterValue is
+// what `/` searches over.
+type item struct {
+	name string
+	desc string
+}
+
+func (i item) Title() string       { return i.name }
+func (i item) Description() string { return i.desc }
+func (i item) FilterValue() string { return i.name }
+
+// Starting size, until the terminal reports its own.
+const (
+	defaultWidth  = 80
+	defaultHeight = 24
+)
+
+type model struct {
+	list list.Model
+
+	// Replaced by the first tea.WindowSizeMsg. Until then these hold the
+	// defaults above, so the first frame draws something.
+	width, height int
+}
+
+func newModel() model {
+	items := []list.Item{
+		item{name: "first", desc: "replace these with real data"},
+		item{name: "second", desc: "see the Cmd note in Init"},
+	}
+
+	// NewDefaultDelegate draws title + description per row. Swap it for
+	// your own delegate to change how a row looks.
+	//
+	// Sized to a conventional 80x24 rather than 0x0. The real size
+	// arrives as a WindowSizeMsg and replaces this immediately - but a
+	// list created at zero renders nothing at all, so a terminal that is
+	// slow to report its size shows an empty screen first, and one that
+	// never reports shows an empty screen forever.
+	l := list.New(items, list.NewDefaultDelegate(), defaultWidth, defaultHeight)
+	l.Title = "{{ .Name }}"
+
+	// q is handled in Update, so the list does not know about it; without
+	// this the help line never mentions how to leave.
+	l.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
+		}
+	}
+
+	return model{list: l, width: defaultWidth, height: defaultHeight}
+}
+
+// Init runs once, before the first render. Return a tea.Cmd here to do
+// startup work - loading from a file or an API - and handle the message
+// it produces in Update. Returning nil means "nothing to do".
+func (m model) Init() tea.Cmd {
+	return nil
+}
+
+// Update handles one message and returns the next state. It must not
+// block: anything slow belongs in a tea.Cmd.
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		m.list.SetSize(msg.Width, msg.Height)
+		return m, nil
+
+	case tea.KeyPressMsg:
+		// While the filter is open, every key belongs to it - including
+		// "q". Checking this first is what stops typing a name that
+		// contains q from quitting the program.
+		if m.list.FilterState() == list.Filtering {
+			break
+		}
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		}
+	}
+
+	// Anything not handled above goes to the list: arrows, page keys,
+	// the filter. Returning its Cmd is what keeps its spinner and
+	// filtering working.
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+// View renders the current state. Pure: no state changes, no I/O.
+func (m model) View() tea.View {
+	// No help line here: list.Model draws its own, generated from its
+	// real keybindings, and a second hand-written one beside it says the
+	// same things twice and drifts the moment a binding changes. `q` is
+	// added to that help in newModel instead, via AdditionalShortHelpKeys.
+	v := tea.NewView(m.list.View())
+	// Draw on the terminal's alternate buffer, so the shell's scrollback
+	// is untouched and whatever the user had on screen comes back when
+	// the program exits. In v2 this is a field on the View rather than a
+	// program option.
+	v.AltScreen = true
+	return v
+}

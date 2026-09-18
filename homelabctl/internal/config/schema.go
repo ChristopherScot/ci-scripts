@@ -31,7 +31,7 @@ const Schema = `{
     "runtime": {
       "type": "string",
       "description": "Which language/shape plugin builds this. See homelabctl init --help.",
-      "examples": ["go-service", "node-service", "go-cli"]
+      "examples": ["go-service", "node-service", "go-cli", "go-tui"]
     },
     "module": {
       "type": "string",

@@ -140,7 +140,7 @@ type Artifacts struct {
 // that is not.
 type Runtime interface {
 	// Name is the value used in config.yaml's `runtime:` field, e.g.
-	// go-service, node-service, go-cli.
+	// go-service, node-service, go-cli, go-tui.
 	Name() string
 
 	// SpecFiles are the paths that exist only because there is a spec -

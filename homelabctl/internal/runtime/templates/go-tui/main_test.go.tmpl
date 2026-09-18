@@ -1,0 +1,85 @@
+package main
+
+// A TUI looks untestable and is not: Update is a pure function from
+// (state, message) to state, so the whole interface can be driven
+// without a terminal. These tests send messages directly.
+
+import (
+	"strings"
+	"testing"
+
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+)
+
+// A list created at zero renders nothing, so the first frame would be
+// blank until the terminal reported its size - and stay blank forever if
+// it never did.
+func TestFirstFrameDrawsBeforeAnyResize(t *testing.T) {
+	if content := newModel().View().Content; !strings.Contains(content, "first") {
+		t.Errorf("nothing rendered before the first WindowSizeMsg:\n%q", content)
+	}
+}
+
+// The window size replaces the default once it arrives.
+func TestResizeTakesTheWholeWindow(t *testing.T) {
+	m, _ := newModel().Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	if got := m.(model).list.Height(); got != 40 {
+		t.Errorf("list height = %d, want 40", got)
+	}
+}
+
+// q quits - but not while the filter is open, or a name containing "q"
+// could not be typed. This is the bug the FilterState check prevents.
+func TestQuitKey(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		filtering bool
+		wantQuit  bool
+	}{
+		{"idle", false, true},
+		{"filtering", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModel()
+			m.list.SetSize(80, 24)
+			if tc.filtering {
+				// Open the filter the way the user does.
+				updated, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+				m = updated.(model)
+				if m.list.FilterState() != list.Filtering {
+					t.Fatal("filter did not open")
+				}
+			}
+
+			_, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+
+			// tea.Quit is a Cmd; calling it yields tea.QuitMsg.
+			quit := false
+			if cmd != nil {
+				if _, ok := cmd().(tea.QuitMsg); ok {
+					quit = true
+				}
+			}
+			if quit != tc.wantQuit {
+				t.Errorf("quit = %v, want %v", quit, tc.wantQuit)
+			}
+		})
+	}
+}
+
+// The help line tells the user how to leave. A TUI that traps someone in
+// an alt-screen with no visible way out is the worst failure this can
+// have, so it is worth a test.
+//
+// Asserting on "quit" alone, not "q quit": the rendered help carries
+// ANSI styling between the key and its label, so the two are not
+// adjacent in the output even though they are on screen.
+func TestViewShowsHowToQuit(t *testing.T) {
+	m, _ := newModel().Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	if content := m.(model).View().Content; !strings.Contains(content, "quit") {
+		t.Errorf("view does not say how to quit:\n%s", content)
+	}
+}
