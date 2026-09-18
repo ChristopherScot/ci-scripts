@@ -664,12 +664,17 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	// Rendered here rather than beside the write, so the allowlist can
 	// name them: --overwrite has to know every path init produces before
 	// it writes the first one.
-	var manifests []render.Output
+	// What the deploy plane owns, NAMED rather than rendered.
+	//
+	// --overwrite needs the inventory, not the bodies. Rendering to get
+	// it meant calling render.All with a zero Source, which has no git
+	// remote and no manifest contents: it wrote an argocd.json missing
+	// repoURL and manifestPath, and failed outright on any config
+	// carrying manifests:. render.Files answers the question that was
+	// actually being asked.
+	var manifestPaths []string
 	if a.Deployable {
-		var err error
-		if manifests, err = render.All(c, render.Source{}); err != nil {
-			return err
-		}
+		manifestPaths = render.Files(c)
 	}
 
 	scaffolding := map[string]bool{}
@@ -691,11 +696,8 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 			scaffolding[f.Path] = true
 		}
 	}
-	// Manifests too: init renders them with render.All, so --overwrite
-	// deploy/x re-runs the same function render would. It is not a
-	// second implementation, just a second entry point.
-	for _, out := range manifests {
-		scaffolding[filepath.Join("deploy", c.Name, out.Path)] = true
+	for _, mp := range manifestPaths {
+		scaffolding[filepath.Join("deploy", c.Name, mp)] = true
 	}
 	if err := checkOverwrite(o.overwrite, scaffolding); err != nil {
 		return err
@@ -755,6 +757,26 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// Nobody edits it, and a stale copy silently validates against a
 		// schema the tool stopped using - so the tool keeps it current.
 		if err := config.WriteSchema(dir); err != nil {
+			return err
+		}
+		// Rendered HERE rather than from the inventory above, and with a
+		// real Source.
+		//
+		// setupRemote has already run (see run()), so the tree is a
+		// clone with a remote and gitSource resolves - which is what
+		// makes argocd.json carry repoURL and manifestPath. Rendering
+		// with a zero Source wrote a file that `render --register` then
+		// refuses as "no git remote yet".
+		//
+		// Deferred to here so a failure lands after the scaffolding
+		// checks rather than before them.
+		cfgPath := filepath.Join(dir, "config.yaml")
+		src, err := withManifests(gitSource(cfgPath), c, cfgPath)
+		if err != nil {
+			return err
+		}
+		manifests, err := render.All(c, src)
+		if err != nil {
 			return err
 		}
 		// Manifests are generated rather than copied, so they reflect

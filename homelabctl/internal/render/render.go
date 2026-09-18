@@ -125,6 +125,65 @@ func imageRef(c *config.Config) string {
 	return c.Image.Repository + ":latest"
 }
 
+// Files lists the paths a service's deploy directory will contain,
+// without rendering any of them.
+//
+// For callers that need to KNOW the file set rather than produce it -
+// init, so `--overwrite` can validate a filename against the deploy
+// plane's inventory. Rendering to answer that question meant calling
+// All with a zero Source, which needs a git remote it does not have at
+// scaffold time: the result was an argocd.json missing repoURL and
+// manifestPath, and a hard failure for any config carrying manifests:.
+//
+// Shares selectedFiles with All, so the two cannot disagree about which
+// files a config produces. Listing them a second time by hand is the
+// bug this function exists to remove.
+func Files(c *config.Config) []string {
+	paths := make([]string, 0, 8)
+	for _, f := range selectedFiles(c) {
+		paths = append(paths, f.path)
+	}
+	paths = append(paths, c.Manifests...)
+	paths = append(paths, "kustomization.yaml", AppEntryFile)
+	return paths
+}
+
+// selected is one generated manifest: the file name and the function
+// that produces its body, deferred so Files never renders.
+type selected struct {
+	path string
+	body func(c *config.Config, imageRef string) string
+}
+
+// selectedFiles is which generated manifests a config produces.
+//
+// The single source of truth for that question. All renders these;
+// Files names them. Both walk this slice, so a new manifest kind is one
+// entry rather than two lists to keep in step.
+//
+// Excludes kustomization.yaml (it lists the others, so it is appended
+// last) and argocd.json (generator input, not a Kubernetes resource).
+func selectedFiles(c *config.Config) []selected {
+	var out []selected
+	// Language and shape are independent: the runtime decided how this
+	// is built, the kind decides what it becomes. A cron job has no
+	// Service, no probes and no rollout strategy - a pod that exits on
+	// purpose has nothing to keep ready.
+	if c.IsCronJob() {
+		out = append(out, selected{"cronjob.yaml", cronJob})
+	} else {
+		out = append(out, selected{"deployment.yaml", deployment})
+		out = append(out, selected{"service.yaml", func(c *config.Config, _ string) string { return service(c) }})
+	}
+	if c.Secrets != nil {
+		out = append(out, selected{"externalsecret.yaml", func(c *config.Config, _ string) string { return externalSecret(c) }})
+	}
+	if c.Ingress != nil {
+		out = append(out, selected{"ingress.yaml", func(c *config.Config, _ string) string { return ingress(c) }})
+	}
+	return out
+}
+
 func All(c *config.Config, src Source) ([]Output, error) {
 	imageRef := imageRef(c)
 	var out []Output
@@ -147,17 +206,8 @@ func All(c *config.Config, src Source) ([]Output, error) {
 	// built, the kind decides what it becomes. A cron job has no Service,
 	// no probes and no rollout strategy - a pod that exits on purpose has
 	// nothing to keep ready.
-	if c.IsCronJob() {
-		add("cronjob.yaml", cronJob(c, imageRef))
-	} else {
-		add("deployment.yaml", deployment(c, imageRef))
-		add("service.yaml", service(c))
-	}
-	if c.Secrets != nil {
-		add("externalsecret.yaml", externalSecret(c))
-	}
-	if c.Ingress != nil {
-		add("ingress.yaml", ingress(c))
+	for _, f := range selectedFiles(c) {
+		add(f.path, f.body(c, imageRef))
 	}
 	// Hand-written manifests, copied verbatim and listed alongside the
 	// generated ones.

@@ -690,3 +690,102 @@ func TestMissingManifestIsAnError(t *testing.T) {
 		t.Fatal("a manifest that was never read rendered as if it did not exist")
 	}
 }
+
+// Files names exactly what All renders, and renders nothing to do it.
+//
+// init needs the deploy plane's inventory so `--overwrite` can validate
+// a filename. It used to get that by calling All with a zero Source,
+// which has no git remote and no manifest contents - so it wrote an
+// argocd.json missing repoURL and manifestPath, and failed outright on
+// any config carrying manifests:.
+//
+// Compared as sets against a real render: if the two ever disagree,
+// --overwrite either refuses a file that exists or accepts one that
+// does not.
+func TestFilesNamesWhatAllRenders(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		with func(*config.Config)
+	}{
+		{"plain service", func(*config.Config) {}},
+		{"with ingress", func(c *config.Config) {
+			c.Ingress = &config.Ingress{Hosts: []config.IngressHost{{Name: "x.example.com"}}}
+		}},
+		{"with manifests", func(c *config.Config) { c.Manifests = []string{"db.yaml"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := config.Defaults()
+			c.Name = "svc"
+			c.Team = "platform"
+			c.Runtime = "go"
+			c.Port = 8080
+			c.Image.Repository = "ghcr.io/example/svc"
+			tc.with(&c)
+
+			src := Source{RepoURL: "https://github.com/example/svc", Path: "deploy"}
+			if len(c.Manifests) > 0 {
+				src.Manifests = map[string]string{
+					"db.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: db\n",
+				}
+			}
+			outs, err := All(&c, src)
+			if err != nil {
+				t.Fatalf("All: %v", err)
+			}
+
+			rendered := map[string]bool{}
+			for _, o := range outs {
+				rendered[o.Path] = true
+			}
+			listed := map[string]bool{}
+			for _, p := range Files(&c) {
+				listed[p] = true
+			}
+
+			for p := range rendered {
+				if !listed[p] {
+					t.Errorf("All renders %q but Files does not name it", p)
+				}
+			}
+			for p := range listed {
+				if !rendered[p] {
+					t.Errorf("Files names %q but All does not render it", p)
+				}
+			}
+		})
+	}
+}
+
+// Files must not need a Source, because its caller has no git remote.
+//
+// The whole reason it exists: asking "what files are there" used to
+// require the inputs for "produce the files", which init cannot supply.
+func TestFilesNeedsNoSource(t *testing.T) {
+	c := config.Defaults()
+	c.Name = "svc"
+	c.Team = "platform"
+	c.Runtime = "go"
+	c.Port = 8080
+	c.Image.Repository = "ghcr.io/example/svc"
+	c.Manifests = []string{"db.yaml"} // would make All fail with no Source
+
+	got := Files(&c)
+	if len(got) == 0 {
+		t.Fatal("Files returned nothing")
+	}
+	var sawManifest, sawEntry bool
+	for _, p := range got {
+		if p == "db.yaml" {
+			sawManifest = true
+		}
+		if p == AppEntryFile {
+			sawEntry = true
+		}
+	}
+	if !sawManifest {
+		t.Error("Files omits a manifest named in config")
+	}
+	if !sawEntry {
+		t.Errorf("Files omits %s", AppEntryFile)
+	}
+}
