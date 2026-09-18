@@ -1,5 +1,15 @@
+# Dockerfile.dockerignore, beside the Dockerfile it belongs to.
+#
+# This service builds from the REPOSITORY ROOT - the only context that
+# can include the npm workspace's single package-lock.json - and Docker
+# reads a plain .dockerignore only from the context root. A
+# Dockerfile-specific ignore-file takes precedence over that root file,
+# which keeps this list with the service it describes.
+#
+# The patterns are therefore repo-wide: ** so they match inside every
+# service directory, not just the top level.
 .git
 .github
-node_modules
-deploy
-*.md
+**/node_modules
+**/deploy
+**/*.md

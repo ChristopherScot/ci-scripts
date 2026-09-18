@@ -1232,3 +1232,57 @@ func TestRegenRewritesOnlyGeneratedFiles(t *testing.T) {
 		}
 	}
 }
+
+// A node-service image builds from the repository root, because that is
+// where npm workspaces keep the one package-lock.json its `npm ci` needs.
+//
+// This pairing is easy to half-change and the failure is remote from the
+// cause: the workflow's test job installed from the root lockfile while
+// the image still built with the SERVICE directory as its context, so
+// `COPY package*.json ./` matched nothing and the build died with npm's
+// EUSAGE - "can only install with an existing package-lock.json" - about
+// a lockfile that was right there, one level up and outside the context.
+func TestNodeServiceImageBuildsFromTheRepoRoot(t *testing.T) {
+	r, err := Get("node-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := testParams()
+	p.PathFilter = "services/svc"
+	a := r.Artifacts(p)
+
+	// A context of "." with an explicit file:, not the service directory.
+	// Without the file: Docker would look for ./Dockerfile, which a
+	// monorepo does not have.
+	for _, want := range []string{"context: .", "file: services/svc/Dockerfile"} {
+		if !strings.Contains(a.Workflow, want) {
+			t.Errorf("workflow missing %q", want)
+		}
+	}
+
+	// Every COPY of the service's own files goes through its directory,
+	// since paths resolve from the root rather than from beside the
+	// Dockerfile. A bare `COPY . .` here would ship every sibling.
+	if strings.Contains(a.Dockerfile, "COPY --chown=65532:65532 . .") {
+		t.Error("Dockerfile COPYs the whole root context; expected the service directory")
+	}
+	if !strings.Contains(a.Dockerfile, "services/svc/") {
+		t.Error("Dockerfile does not COPY through the service directory")
+	}
+
+	// Docker reads a plain .dockerignore only from the context root, so
+	// a per-service one has to use the Dockerfile-specific name to be
+	// read at all.
+	var found bool
+	for _, f := range a.Files {
+		if f.Path == "Dockerfile.dockerignore" {
+			found = true
+		}
+		if f.Path == ".dockerignore" {
+			t.Error("plain .dockerignore in the service directory is never read from a root context")
+		}
+	}
+	if !found {
+		t.Error("no Dockerfile.dockerignore")
+	}
+}

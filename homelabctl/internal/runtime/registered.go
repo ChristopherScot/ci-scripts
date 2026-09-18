@@ -94,7 +94,13 @@ func init() {
 			"server.js.tmpl":      {dst: "server.js"},
 			"server.test.js.tmpl": {dst: "server.test.js"},
 			"gitignore":           {dst: ".gitignore"},
-			"dockerignore":        {dst: ".dockerignore"},
+			// Dockerfile.dockerignore, not .dockerignore: this runtime
+			// builds from a ROOT context, and Docker reads a plain
+			// .dockerignore only from the context root. The
+			// Dockerfile-specific ignore-file lives beside its
+			// Dockerfile and takes precedence, so the file stays with
+			// the service it describes.
+			"dockerignore": {dst: "Dockerfile.dockerignore"},
 		},
 	})
 }

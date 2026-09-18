@@ -12,8 +12,20 @@
 # to a digest if that matters more than picking up patch releases.
 FROM node:24-alpine AS build
 
+# Every path here is relative to the REPOSITORY ROOT, which is the build
+# context - see the `context:`/`file:` pair in the generated workflow.
+# npm workspaces keep a single package-lock.json at that root, and a
+# build context never includes its parent, so a context of this service's
+# own directory could not see the lockfile at all.
 WORKDIR /app
+
+# The root manifests first: in a workspace the lockfile covers every
+# service, and npm needs the root package.json to know that.
 COPY package*.json ./
+# The service's own manifest, at the path npm expects it inside the
+# workspace, plus any sibling this service depends on. Manifests only -
+# source comes later, so a source edit does not bust the install cache.
+COPY {{ .ServiceDir }}/package.json ./{{ .ServiceDir }}/
 # `npm ci` needs package-lock.json, which `homelabctl init` generates and
 # CI regenerates. --omit=dev keeps devDependencies out of the image.
 #
@@ -32,7 +44,10 @@ ENV VERSION=$VERSION
 
 WORKDIR /app
 COPY --from=build --chown=65532:65532 /app/node_modules ./node_modules
-COPY --chown=65532:65532 . .
+# Just this service's source, not the whole repo: the context is the
+# repository root, so a bare `COPY . .` would ship every sibling service
+# into the image.
+COPY --chown=65532:65532 {{ .ServiceDir }}/ ./
 
 USER 65532:65532
 EXPOSE {{ .Port }}
