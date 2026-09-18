@@ -744,3 +744,43 @@ func TestGoServiceDisablesUnusedInstrumentation(t *testing.T) {
 		t.Error("generate.go does not pass --config, so ogen.yml is ignored")
 	}
 }
+
+// `go build` with no -o names the binary after the last element of the
+// module path, not the service. go-shlink-redirector is the repo that
+// proves the difference: a .gitignore keyed on the service name would
+// leave a multi-megabyte binary to be committed by the first `git add -A`.
+func TestGitignoreCoversTheBuiltBinary(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := testParams()
+	p.Name = "shlink-redirector"
+	p.Module = "github.com/ChristopherScot/go-shlink-redirector"
+
+	var ignore string
+	for _, f := range r.Artifacts(p).Files {
+		if f.Path == ".gitignore" {
+			ignore = f.Body
+		}
+	}
+	if ignore == "" {
+		t.Fatal("go-service ships no .gitignore")
+	}
+	if !strings.Contains(ignore, "/go-shlink-redirector") {
+		t.Errorf(".gitignore does not cover the built binary:\n%s", ignore)
+	}
+}
+
+func TestBinaryNameComesFromTheModulePath(t *testing.T) {
+	for _, tc := range []struct{ module, name, want string }{
+		{"github.com/o/go-shlink-redirector", "shlink-redirector", "go-shlink-redirector"},
+		{"github.com/o/widget", "widget", "widget"},
+		{"github.com/o/platform/services/widget", "widget", "widget"},
+		{"", "fallback", "fallback"},
+	} {
+		if got := (Params{Module: tc.module, Name: tc.name}).BinaryName(); got != tc.want {
+			t.Errorf("BinaryName(%q) = %q, want %q", tc.module, got, tc.want)
+		}
+	}
+}

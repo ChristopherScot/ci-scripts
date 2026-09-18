@@ -75,8 +75,6 @@ func All(c *config.Config, imageRef string) ([]Output, error) {
 		out = append(out, Output{Path: path, Body: body})
 	}
 
-	add("namespace.yaml", namespace(c))
-
 	// Language and shape are independent: the runtime decided how this is
 	// built, the kind decides what it becomes. A cron job has no Service,
 	// no probes and no rollout strategy - a pod that exits on purpose has
@@ -153,26 +151,30 @@ func kustomization(c *config.Config, out []Output) string {
 	return b.String()
 }
 
-func namespace(c *config.Config) string {
-	// Pod Security Admission enforces at the namespace what the container
-	// securityContext only requests. The level must match what the pod
-	// actually asks for: enforcing `restricted` on a hardened:false
-	// service rejects its own pod at admission, and Argo still reports
-	// Synced while nothing runs.
-	level := "restricted"
-	if !c.Hardened {
-		level = "baseline"
-	}
-	return fmt.Sprintf(`apiVersion: v1
-kind: Namespace
-metadata:
-  name: %s
-  labels:
-    pod-security.kubernetes.io/enforce: %s
-    pod-security.kubernetes.io/enforce-version: latest
-`, c.Namespace, level)
-}
-
+// No namespace.yaml is rendered, deliberately.
+//
+// A Namespace is shared infrastructure, and this tool works at the level
+// of one app. Pod Security Admission is enforced by a label on the
+// NAMESPACE, so rendering one meant a service imposing its own security
+// level on every neighbour: adding the redirector to `shlink` would have
+// labelled that namespace `restricted`, which shlink itself and
+// shlink-web cannot meet. They would have kept running - PSA gates
+// admission, not running pods - and then failed to start again after any
+// rollout or node drain, as an outage nobody would connect to a change
+// in a different service.
+//
+// What this tool CAN do is make its own pod acceptable anywhere,
+// including in a namespace someone else has locked down. The generated
+// securityContext meets `restricted` on its own: runAsNonRoot,
+// allowPrivilegeEscalation false, all capabilities dropped,
+// seccompProfile RuntimeDefault, and never privileged. Verified by
+// dry-running the generated pod into a restricted namespace.
+//
+// Creating the namespace stays with whoever owns it. The Argo
+// Application sets CreateNamespace=true, so a new one still appears
+// without anyone applying YAML by hand; it simply arrives unlabelled,
+// and its security level is set by the person who owns the namespace
+// rather than by whichever app happened to be generated last.
 func deployment(c *config.Config, imageRef string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `apiVersion: apps/v1
@@ -471,16 +473,57 @@ spec:
 `, sa, c.Namespace, store, c.Namespace, c.VaultRoleName(), sa, secret, c.Namespace, store, secret)
 	for _, k := range c.Secrets.Keys {
 		fmt.Fprintf(&b, "    - secretKey: %s\n      remoteRef: { key: %s, property: %s }\n",
-			k, c.Secrets.VaultPath, strings.ToLower(k))
+			k.Env, c.Secrets.VaultPath, k.Property)
 	}
 	return b.String()
 }
 
+// ingress renders one or two Ingress resources: one for the names that
+// have a certificate, one for the names that cannot have one.
+//
+// They must be separate resources because ssl-redirect is a
+// RESOURCE-scoped annotation, not a per-host one. Put a plain-HTTP name
+// in the same Ingress as a certified one and there is no correct
+// setting: leave the redirect on and the plain name 308s to a
+// certificate that does not cover it; turn it off and the certified name
+// stops being redirected too. Three services in this cluster were
+// merged, and two of them served their admin UI over plain HTTP as a
+// result.
+//
+// The plain resource deliberately carries no cluster-issuer annotation.
+// That is what makes an impossible ACME order structurally impossible
+// rather than merely avoided - cert-manager never looks at it.
 func ingress(c *config.Config) string {
 	class := "external"
 	if c.Ingress.Public {
 		class = "public"
 	}
+
+	var certified, plain []config.IngressHost
+	for _, h := range c.Ingress.Hosts {
+		if h.TLS {
+			certified = append(certified, h)
+		} else {
+			plain = append(plain, h)
+		}
+	}
+
+	var b strings.Builder
+	if len(certified) > 0 {
+		b.WriteString(ingressDoc(c, class, c.Name, certified, true))
+	}
+	if len(plain) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("---\n")
+		}
+		b.WriteString(ingressDoc(c, class, c.Name+"-lan", plain, false))
+	}
+	return b.String()
+}
+
+// ingressDoc renders one Ingress. tls decides whether it gets a
+// certificate and the annotations that go with one.
+func ingressDoc(c *config.Config, class, name string, hosts []config.IngressHost, tls bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -488,20 +531,32 @@ metadata:
   name: %s
   namespace: %s
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-`, c.Name, c.Namespace)
+`, name, c.Namespace)
+	if tls {
+		b.WriteString("    cert-manager.io/cluster-issuer: letsencrypt-prod\n")
+	} else {
+		// These names have no certificate, so a redirect to https sends
+		// the browser to one that cannot match. Confined to this
+		// resource, so the certified names keep their redirect.
+		b.WriteString("    nginx.ingress.kubernetes.io/ssl-redirect: \"false\"\n")
+	}
 	if c.Ingress.Authelia {
 		b.WriteString(`    nginx.ingress.kubernetes.io/auth-url: "http://authelia.authelia.svc.cluster.local/api/verify"
     nginx.ingress.kubernetes.io/auth-signin: "https://auth.home.chrisscotmartin.com/?rd=$scheme://$host$escaped_request_uri"
 `)
 	}
-	fmt.Fprintf(&b, `spec:
-  ingressClassName: %s
-  tls:
-    - hosts: [%s]
-      secretName: %s-tls
-  rules:
-    - host: %s
+	fmt.Fprintf(&b, "spec:\n  ingressClassName: %s\n", class)
+	if tls {
+		names := make([]string, len(hosts))
+		for i, h := range hosts {
+			names[i] = h.Name
+		}
+		fmt.Fprintf(&b, "  tls:\n    - hosts: [%s]\n      secretName: %s-tls\n",
+			strings.Join(names, ", "), c.Name)
+	}
+	b.WriteString("  rules:\n")
+	for _, h := range hosts {
+		fmt.Fprintf(&b, `    - host: %s
       http:
         paths:
           - path: /
@@ -511,7 +566,8 @@ metadata:
                 name: %s
                 port:
                   number: 80
-`, class, c.Ingress.Host, c.Name, c.Ingress.Host, c.Name)
+`, h.Name, c.Name)
+	}
 	return b.String()
 }
 

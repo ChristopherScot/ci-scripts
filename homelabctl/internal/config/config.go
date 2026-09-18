@@ -108,12 +108,201 @@ type Image struct {
 // own Vault path, following the per-app policy convention: one role, one
 // path, one namespace.
 type Secrets struct {
-	VaultPath string   `yaml:"vaultPath"`
-	Keys      []string `yaml:"keys"`
+	VaultPath string `yaml:"vaultPath"`
+
+	// Keys are the environment variables to inject, and the Vault
+	// properties they come from.
+	Keys []SecretKey `yaml:"keys"`
+}
+
+// SecretKey maps one environment variable to one property under the
+// service's Vault path. It decodes from either form:
+//
+//	keys:
+//	  - NTFY_TOKEN              # property: ntfy_token
+//	  - SHLINK_API_KEY: api-key # property: api-key
+//
+// The bare form derives the property by lowercasing, which is right when
+// the variable is named for what it is. The mapping form exists because
+// that derivation is wrong whenever the variable repeats its own app
+// name: SHLINK_API_KEY under vaultPath `shlink` would ask Vault for
+// `shlink/shlink_api_key`, and the convention across this cluster is that
+// the property does NOT repeat the path - `arr/api-keys` holds `sonarr`,
+// `authelia/keys` holds `session_secret`.
+//
+// Getting it wrong is not a render-time error: the manifests apply
+// cleanly and ESO then fails to sync a property that does not exist, so
+// the pod starts without the variable it needs.
+type SecretKey struct {
+	Env      string // the environment variable inside the pod
+	Property string // the property under VaultPath
+}
+
+// MarshalYAML writes back whichever form the key came from, so a file
+// this tool writes is a file it can read.
+//
+// Without it, yaml.Marshal emits the struct - {Env: X, Property: y} -
+// which UnmarshalYAML then rejects, because it accepts a string or a
+// single-entry mapping and neither is that. The asymmetry is silent
+// until something round-trips a config, and then it fails at load with
+// an error about the file rather than about the code.
+//
+// No discriminator field is needed to remember the original form: the
+// bare form means "property is the lowercased env var", so the rule that
+// decodes it also decides how to encode it.
+func (k SecretKey) MarshalYAML() (any, error) {
+	if k.Property == strings.ToLower(k.Env) {
+		return k.Env, nil
+	}
+	return map[string]string{k.Env: k.Property}, nil
+}
+
+// EnvKeys builds keys the conventional way, for a Config assembled in Go
+// code rather than decoded from YAML.
+func EnvKeys(envs ...string) []SecretKey {
+	out := make([]SecretKey, 0, len(envs))
+	for _, e := range envs {
+		out = append(out, SecretKey{Env: e, Property: strings.ToLower(e)})
+	}
+	return out
+}
+
+// UnmarshalYAML accepts a bare string or a single-entry mapping.
+func (k *SecretKey) UnmarshalYAML(value *yaml.Node) error {
+	var env string
+	if err := value.Decode(&env); err == nil {
+		k.Env = env
+		k.Property = strings.ToLower(env)
+		return nil
+	}
+
+	var m map[string]string
+	if err := value.Decode(&m); err != nil {
+		return fmt.Errorf("a secrets key must be `NAME` or `NAME: vault-property`")
+	}
+	if len(m) != 1 {
+		return fmt.Errorf("a secrets key mapping must have exactly one entry, got %d", len(m))
+	}
+	for env, prop := range m {
+		k.Env, k.Property = env, prop
+	}
+	return nil
+}
+
+// IngressHost is one hostname this service answers on.
+//
+// It decodes from either form:
+//
+//	hosts:
+//	  - argo.home.chrisscotmartin.com   # certified, HTTPS
+//	  - argo.lab                        # no cert, plain HTTP
+//	  - name: internal.example.com      # looks certifiable, deliberately not
+//	    tls: false
+//
+// The bare form derives TLS from the name, because for a public CA the
+// answer is not a preference: it will not issue for a single-label name
+// like `go`, or for a private suffix like .lab. Asking the author to
+// state it invites `tls: true` on a name no CA will ever sign, which
+// fails as a cert-manager order that retries forever while the manifests
+// apply cleanly and Argo reports Synced.
+//
+// The mapping form exists for the one case derivation cannot see: a name
+// that LOOKS certifiable but is not reachable for a challenge, or that
+// you simply do not want a certificate for.
+type IngressHost struct {
+	Name string
+	TLS  bool
+}
+
+// UnmarshalYAML accepts a bare hostname or a {name, tls} mapping.
+func (h *IngressHost) UnmarshalYAML(value *yaml.Node) error {
+	var name string
+	if err := value.Decode(&name); err == nil {
+		h.Name, h.TLS = name, Certifiable(name)
+		return nil
+	}
+	var m struct {
+		Name string `yaml:"name"`
+		TLS  *bool  `yaml:"tls"`
+	}
+	if err := value.Decode(&m); err != nil {
+		return fmt.Errorf("an ingress host must be a name, or a mapping of name and tls")
+	}
+	if m.Name == "" {
+		return fmt.Errorf("an ingress host mapping needs a name")
+	}
+	h.Name = m.Name
+	h.TLS = Certifiable(m.Name)
+	if m.TLS != nil {
+		h.TLS = *m.TLS
+	}
+	return nil
+}
+
+// MarshalYAML writes back the form the host came from, so a file this
+// tool writes is a file it can read.
+func (h IngressHost) MarshalYAML() (any, error) {
+	if h.TLS == Certifiable(h.Name) {
+		return h.Name, nil
+	}
+	return map[string]any{"name": h.Name, "tls": h.TLS}, nil
+}
+
+// IngressHosts builds hosts the conventional way, deriving TLS from each
+// name, for a Config assembled in Go code rather than decoded from YAML.
+func IngressHosts(names ...string) []IngressHost {
+	out := make([]IngressHost, 0, len(names))
+	for _, n := range names {
+		out = append(out, IngressHost{Name: n, TLS: Certifiable(n)})
+	}
+	return out
+}
+
+// Certifiable reports whether a public CA could issue for this name.
+//
+// It answers a question about the NAME, not about this cluster or this
+// domain: there is deliberately no allowlist of domains here, so any
+// real domain - yours, a customer's, one bought tomorrow - is treated as
+// certifiable without the tool being told about it.
+//
+// Two things make a name impossible to certify, and both are standards,
+// not local convention:
+//
+//   - a single label (`go`) is not a domain; the CA/Browser Forum
+//     baseline requirements forbid issuing for one.
+//   - a reserved or private-use TLD. These are the RFC 6761 special-use
+//     names (.test, .example, .invalid, .localhost), .local from RFC 6762
+//     mDNS, and .internal, which ICANN reserved for private use in 2024.
+//     No CA can validate control of any of them.
+//
+// .lab is here as the one local convention, because this cluster uses it
+// for short LAN names. It is not a reserved TLD - it is simply not
+// delegated, so a challenge cannot reach it.
+//
+// A name that passes here can still fail to get a certificate, if the
+// ACME challenge cannot reach it - a split-horizon DNS name, say. That
+// is what `tls: false` on a host is for. This only has to be right about
+// names that can NEVER work, so the list stays short and justifiable
+// rather than trying to predict reachability.
+func Certifiable(host string) bool {
+	i := strings.LastIndex(host, ".")
+	if i < 0 {
+		return false // a single label is not a domain
+	}
+	switch strings.ToLower(host[i+1:]) {
+	case "test", "example", "invalid", "localhost", // RFC 6761
+		"local",    // RFC 6762, mDNS
+		"internal", // ICANN-reserved for private use, 2024
+		"lab":      // this cluster's short-name convention; undelegated
+		return false
+	}
+	return true
 }
 
 type Ingress struct {
-	Host string `yaml:"host"`
+	// Hosts are the names this service answers on. The first certifiable
+	// one names the TLS secret, so reordering does not reissue a cert.
+	Hosts []IngressHost `yaml:"hosts"`
 	// Public routes via the internet-facing controller; otherwise LAN-only.
 	Public bool `yaml:"public,omitempty"`
 	// Authelia puts forward-auth in front. Not available for public hosts
@@ -341,8 +530,36 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.Ingress != nil {
-		if c.Ingress.Host == "" {
-			add("ingress.host is required when ingress is set")
+		if len(c.Ingress.Hosts) == 0 {
+			add("ingress.hosts must list at least one hostname")
+		}
+		seen := map[string]bool{}
+		certified := 0
+		for i, h := range c.Ingress.Hosts {
+			switch {
+			case h.Name == "":
+				add("ingress.hosts[%d] has no name", i)
+			case seen[h.Name]:
+				add("ingress.hosts lists %q twice", h.Name)
+			}
+			seen[h.Name] = true
+			if h.TLS {
+				certified++
+			}
+			// The one combination that is not a preference but a
+			// mistake. cert-manager would accept it and retry an order no
+			// CA can ever complete, while the manifests apply cleanly and
+			// Argo reports Synced - and a stuck order burns Let's
+			// Encrypt rate limits for the whole registered domain, which
+			// breaks renewals for unrelated services.
+			if h.TLS && !Certifiable(h.Name) {
+				add("ingress.hosts[%d]: %q asks for tls, but no public CA will issue for it - "+
+					"a single-label name or a private suffix cannot be validated", i, h.Name)
+			}
+		}
+		if len(c.Ingress.Hosts) > 0 && certified == 0 {
+			add("ingress.hosts has no name that can get a certificate, so the service would be plain HTTP only; " +
+				"add an externally-resolvable hostname, or drop the ingress")
 		}
 		// Authelia is LAN-only; pairing it with a public host produces an
 		// endpoint that dead-ends off-network, which is invisible until

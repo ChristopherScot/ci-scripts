@@ -63,8 +63,8 @@ func TestAlwaysRendersKustomizationWithImages(t *testing.T) {
 // Every rendered file must be listed, or Argo silently does not apply it.
 func TestKustomizationListsEveryResource(t *testing.T) {
 	c := base()
-	c.Ingress = &config.Ingress{Host: "svc.example.com"}
-	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: []string{"TOKEN"}}
+	c.Ingress = &config.Ingress{Hosts: config.IngressHosts("svc.example.com")}
+	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: config.EnvKeys("TOKEN")}
 	out := mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest")
 
 	var k string
@@ -145,7 +145,7 @@ func TestIngressClassFollowsPublic(t *testing.T) {
 		{false, "ingressClassName: external"},
 	} {
 		c := base()
-		c.Ingress = &config.Ingress{Host: "h.example.com", Public: tc.public}
+		c.Ingress = &config.Ingress{Hosts: config.IngressHosts("h.example.com"), Public: tc.public}
 		found := false
 		for _, o := range mustAll(t, mustConfig(t, c), "img") {
 			if o.Path == "ingress.yaml" && strings.Contains(o.Body, tc.want) {
@@ -210,7 +210,7 @@ func TestCronJobStillHardenedAndGetsSecrets(t *testing.T) {
 	c := base()
 	c.Kind = config.KindCronJob
 	c.Schedule = "0 3 * * *"
-	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: []string{"TOKEN"}}
+	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: config.EnvKeys("TOKEN")}
 	for _, o := range mustAll(t, mustConfig(t, c), "img") {
 		if o.Path != "cronjob.yaml" {
 			continue
@@ -220,5 +220,118 @@ func TestCronJobStillHardenedAndGetsSecrets(t *testing.T) {
 				t.Errorf("cronjob.yaml missing %q", want)
 			}
 		}
+	}
+}
+
+// ssl-redirect is a RESOURCE-scoped annotation, so a certified host and
+// an uncertifiable one cannot share an Ingress: turning the redirect off
+// for the LAN name turns it off for the FQDN too. Three services in this
+// cluster were merged that way and two served their admin UI over plain
+// HTTP as a result.
+func TestMixedHostsRenderAsTwoIngresses(t *testing.T) {
+	c := base()
+	c.Ingress = &config.Ingress{Hosts: config.IngressHosts("svc.example.com", "svc.lab")}
+
+	var ing string
+	for _, o := range mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest") {
+		if strings.HasSuffix(o.Path, "ingress.yaml") {
+			ing = o.Body
+		}
+	}
+	if ing == "" {
+		t.Fatal("no ingress rendered")
+	}
+
+	docs := strings.Split(ing, "---")
+	if len(docs) != 2 {
+		t.Fatalf("got %d Ingress documents, want 2:\n%s", len(docs), ing)
+	}
+	tlsDoc, lanDoc := docs[0], docs[1]
+
+	// The certified half: an issuer, a tls block, and no redirect
+	// override - so HTTPS is still enforced for this name.
+	if !strings.Contains(tlsDoc, "cert-manager.io/cluster-issuer") {
+		t.Error("the certified Ingress has no issuer")
+	}
+	if !strings.Contains(tlsDoc, "svc.example.com") || strings.Contains(tlsDoc, "svc.lab") {
+		t.Errorf("the certified Ingress should hold only the certifiable host:\n%s", tlsDoc)
+	}
+	if strings.Contains(tlsDoc, "ssl-redirect") {
+		t.Errorf("the certified host lost its HTTPS redirect:\n%s", tlsDoc)
+	}
+
+	// The plain half: no issuer at all, which is what makes an
+	// impossible ACME order structurally impossible rather than avoided.
+	if strings.Contains(lanDoc, "cert-manager.io/cluster-issuer") {
+		t.Errorf("the plain Ingress names an issuer; cert-manager would retry an order forever:\n%s", lanDoc)
+	}
+	if strings.Contains(lanDoc, "tls:") {
+		t.Errorf("the plain Ingress has a tls block for a name no CA will sign:\n%s", lanDoc)
+	}
+	if !strings.Contains(lanDoc, `ssl-redirect: "false"`) {
+		t.Errorf("the plain host would 308 to a certificate that cannot cover it:\n%s", lanDoc)
+	}
+}
+
+// The ordinary case must stay one resource.
+func TestSingleCertifiableHostRendersOneIngress(t *testing.T) {
+	c := base()
+	c.Ingress = &config.Ingress{Hosts: config.IngressHosts("svc.example.com")}
+
+	for _, o := range mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest") {
+		if strings.HasSuffix(o.Path, "ingress.yaml") {
+			if strings.Contains(o.Body, "---") {
+				t.Errorf("a single host rendered two Ingresses:\n%s", o.Body)
+			}
+			if strings.Contains(o.Body, "ssl-redirect") {
+				t.Errorf("a certified host should keep its redirect:\n%s", o.Body)
+			}
+		}
+	}
+}
+
+// A Namespace is shared infrastructure and this tool works at the level
+// of one app, so it must not render one: Pod Security Admission is a
+// namespace LABEL, and rendering it meant a service imposing its own
+// security level on every neighbour. Adding the redirector to `shlink`
+// would have labelled that namespace restricted, which shlink itself
+// cannot meet - and its pods would have kept running until the next
+// rollout, then failed to start.
+func TestNoNamespaceIsRendered(t *testing.T) {
+	for _, o := range mustAll(t, mustConfig(t, base()), "ghcr.io/o/svc:latest") {
+		if strings.Contains(o.Path, "namespace") {
+			t.Errorf("rendered %s; a namespace belongs to whoever owns it", o.Path)
+		}
+		if strings.Contains(o.Body, "pod-security.kubernetes.io") {
+			t.Errorf("%s sets a namespace-wide security level:\n%s", o.Path, o.Body)
+		}
+	}
+}
+
+// The other half of that bargain: if this tool will not lock down a
+// namespace, its pod has to be acceptable in one that someone else has.
+// These are exactly the five things PSA `restricted` requires.
+func TestPodMeetsRestrictedWithoutTheNamespaceLabel(t *testing.T) {
+	var dep string
+	for _, o := range mustAll(t, mustConfig(t, base()), "ghcr.io/o/svc:latest") {
+		if strings.HasSuffix(o.Path, "deployment.yaml") {
+			dep = o.Body
+		}
+	}
+	if dep == "" {
+		t.Fatal("no deployment rendered")
+	}
+	for _, required := range []string{
+		"runAsNonRoot: true",
+		"allowPrivilegeEscalation: false",
+		"drop: [ALL]",
+		"type: RuntimeDefault",
+	} {
+		if !strings.Contains(dep, required) {
+			t.Errorf("missing %q; the pod would be rejected by a restricted namespace:\n%s", required, dep)
+		}
+	}
+	if strings.Contains(dep, "privileged: true") {
+		t.Error("the pod asks to be privileged, which no restricted namespace admits")
 	}
 }

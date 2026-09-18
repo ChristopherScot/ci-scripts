@@ -44,7 +44,7 @@ func TestPortIsNotReportedAsDrift(t *testing.T) {
 // the old name and that binding is not a Kubernetes object.
 func TestServiceAccountRenameIsBlocking(t *testing.T) {
 	c := &config.Config{Name: "newname", Team: "t", Runtime: "go-service", Port: 3000,
-		Secrets: &config.Secrets{VaultPath: "p", Keys: []string{"K"}}}
+		Secrets: &config.Secrets{VaultPath: "p", Keys: config.EnvKeys("K")}}
 	_ = c.Complete()
 
 	f := checkServiceAccount(c, &liveState{ServiceAccount: "oldname"})
@@ -60,7 +60,7 @@ func TestServiceAccountRenameIsBlocking(t *testing.T) {
 
 func TestNoFindingWhenServiceAccountMatches(t *testing.T) {
 	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
-		Secrets: &config.Secrets{VaultPath: "p", Keys: []string{"K"}}}
+		Secrets: &config.Secrets{VaultPath: "p", Keys: config.EnvKeys("K")}}
 	_ = c.Complete()
 	if f := checkServiceAccount(c, &liveState{ServiceAccount: "svc"}); len(f) != 0 {
 		t.Errorf("matching SA reported as drift: %+v", f)
@@ -102,7 +102,7 @@ func TestEnvDriftIgnoresSecretKeys(t *testing.T) {
 		Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
 		Image:   config.Image{Repository: "ghcr.io/o/svc"},
 		Env:     map[string]string{"API_URL": "http://x"},
-		Secrets: &config.Secrets{VaultPath: "svc", Keys: []string{"API_KEY"}},
+		Secrets: &config.Secrets{VaultPath: "svc", Keys: config.EnvKeys("API_KEY")},
 	}
 	_ = c.Complete()
 
@@ -117,7 +117,7 @@ func TestEnvDriftStillCatchesAnUndeclaredVar(t *testing.T) {
 	c := &config.Config{
 		Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
 		Image:   config.Image{Repository: "ghcr.io/o/svc"},
-		Secrets: &config.Secrets{VaultPath: "svc", Keys: []string{"API_KEY"}},
+		Secrets: &config.Secrets{VaultPath: "svc", Keys: config.EnvKeys("API_KEY")},
 	}
 	_ = c.Complete()
 
