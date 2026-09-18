@@ -329,6 +329,60 @@ func TestDeployableRuntimesStampLogContext(t *testing.T) {
 	}
 }
 
+// duration_ms has to keep its fraction.
+//
+// Both templates truncated it first: Go with elapsed.Milliseconds() and
+// Node with Math.round(reply.elapsedTime). A handler serving from memory
+// finishes well under 1ms, so every request in the deployed pokedex
+// logged duration_ms=0 - four hours of traffic, the field present on
+// every line and carrying nothing. It was not visible as a bug because
+// zero is a plausible-looking latency.
+//
+// Matching on the truncating calls rather than on the emitted value
+// because that is the mistake that recurs: both are the obvious way to
+// write it, and neither is wrong-looking in review.
+func TestDeployableRuntimesLogFractionalDuration(t *testing.T) {
+	// Matched against the value logged for duration_ms, not the whole
+	// file: the fix for this leaves a comment behind that names the
+	// truncating call, and a substring search over the file body finds
+	// the explanation and calls it the bug.
+	truncating := []string{
+		".Milliseconds()",          // Go: returns int64
+		"Math.round(reply.elapsed", // Node
+	}
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q) = %v", name, err)
+		}
+		a := r.Artifacts(Params{
+			Spec: true,
+			Name: "svc", Team: "platform",
+			Module: "example.com/svc", Port: 3000,
+		})
+		if !a.Deployable {
+			continue
+		}
+		for _, f := range a.Files {
+			if !isSource(f.Path) {
+				continue
+			}
+			for _, line := range strings.Split(f.Body, "\n") {
+				code, _, _ := strings.Cut(line, "//")
+				if !strings.Contains(code, "duration_ms") {
+					continue
+				}
+				for _, bad := range truncating {
+					if strings.Contains(code, bad) {
+						t.Errorf("%s: %s truncates duration_ms with %s; "+
+							"sub-millisecond handlers all log 0", name, f.Path, bad)
+					}
+				}
+			}
+		}
+	}
+}
+
 // Defaults a deployable service should not have to remember. Each of
 // these was written by hand in approvald first; a template that omits
 // them makes every new service rediscover the same things.

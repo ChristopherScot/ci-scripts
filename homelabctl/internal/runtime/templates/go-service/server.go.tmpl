@@ -115,7 +115,12 @@ func observe(req middleware.Request, next middleware.Next) (middleware.Response,
 		"method", req.Raw.Method,
 		"operation", req.OperationID,
 		"status", status,
-		"duration_ms", elapsed.Milliseconds())
+		// Float milliseconds, not elapsed.Milliseconds(): that truncates to
+		// an integer, and a handler serving from memory finishes well under
+		// 1ms. Every line logged duration_ms=0, so the field was present and
+		// carried nothing - a latency panel built on it reads flat zero
+		// whether the service is fast or dying.
+		"duration_ms", float64(elapsed.Nanoseconds())/1e6)
 	return resp, err
 }
 

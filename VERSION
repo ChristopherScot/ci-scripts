@@ -1,4 +1,6 @@
-v1.3.0
+v1.3.1
+
+v1.3.1 generated clients re-export their schema types; duration_ms is not truncated
 
 v1.3.0 vite bundles the image; hot reload for services
 

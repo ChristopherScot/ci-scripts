@@ -89,7 +89,10 @@ app.addHook('onResponse', (request, reply, done) => {
       method: request.method,
       route,
       status: reply.statusCode,
-      duration_ms: Math.round(reply.elapsedTime),
+      // Not rounded: a handler that only assembles a string finishes
+      // well under 1ms, so Math.round logged 0 on every line - a field
+      // that is present and carries nothing.
+      duration_ms: reply.elapsedTime,
     }, 'request')
   }
   done()
