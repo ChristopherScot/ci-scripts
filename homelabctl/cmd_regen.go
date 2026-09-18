@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -113,6 +114,21 @@ func runRegen(cfgPath string, checkOnly bool) error {
 	// publish time rather than here.
 	params := artifactParams(c, ownerFromModule(dir), "")
 	params.Spec = c.Spec
+	// The module path, not a reconstruction of it. RepoURL and RepoName
+	// are derived from Module, and a service in a monorepo lives at
+	// github.com/owner/repo/services/<name> - rebuilding that from the
+	// service name alone produces github.com/owner/<name>, a repository
+	// that does not exist. npm's --provenance then rejects the publish
+	// for a repository.url that does not match the OIDC claim.
+	if m := moduleFromGoMod(dir); m != "" {
+		params.Module = m
+	}
+	// And the canonical casing, from the remote. go.mod is lowercase by
+	// convention while GitHub keeps the owner's real spelling, and
+	// provenance compares them literally.
+	if owner := ownerFromRemote(dir); owner != "" {
+		params.Owner = owner
+	}
 	rendered := map[string]string{}
 	for _, f := range r.Artifacts(params).Files {
 		rendered[f.Path] = f.Body
@@ -221,6 +237,45 @@ func setPackageVersion(b []byte, version string) ([]byte, bool, error) {
 	}
 	re := regexp.MustCompile(`("version"\s*:\s*")[^"]*(")`)
 	return re.ReplaceAll(b, []byte("${1}"+version+"${2}")), true, nil
+}
+
+// moduleFromGoMod is the full module path, which encodes the repository
+// and, in a monorepo, the directory within it.
+func moduleFromGoMod(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
+}
+
+// ownerFromRemote reads the owner from the git remote, which carries
+// GitHub's canonical casing.
+//
+// go.mod is conventionally lowercase - Go import paths are compared
+// case-insensitively on the module proxy but written lowercase - while
+// GitHub preserves the account's real spelling, and npm's provenance
+// check compares the two literally. Taking the owner from go.mod alone
+// publishes a package whose repository.url can never match.
+func ownerFromRemote(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return ""
+	}
+	url := strings.TrimSpace(string(out))
+	url = strings.TrimSuffix(url, ".git")
+	url = strings.TrimPrefix(url, "git@github.com:")
+	url = strings.TrimPrefix(url, "https://github.com/")
+	if parts := strings.Split(url, "/"); len(parts) >= 2 {
+		return parts[0]
+	}
+	return ""
 }
 
 // ownerFromModule reads the GitHub owner out of go.mod.

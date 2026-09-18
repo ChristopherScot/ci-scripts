@@ -1,4 +1,6 @@
-v1.1.12
+v1.1.13
+
+v1.1.13 regen keeps the module path and the owner's real casing
 
 v1.1.12 generated clients carry repository.url, which --provenance requires
 

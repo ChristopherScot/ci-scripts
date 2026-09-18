@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -181,5 +182,60 @@ func TestSpecVersionIn(t *testing.T) {
 	// initial version rather than failing to scaffold.
 	if got := specVersionIn(t.TempDir()); got != "" {
 		t.Errorf("specVersionIn with no spec = %q, want empty", got)
+	}
+}
+
+// regen must not rebuild the module path from the service name.
+//
+// A monorepo service lives at github.com/owner/repo/services/<name>, and
+// RepoURL is derived from that. Reconstructing it from the name alone
+// gives github.com/owner/<name> - a repository that does not exist - and
+// npm's --provenance then rejects the publish for a repository.url that
+// does not match the OIDC claim.
+func TestModuleFromGoMod(t *testing.T) {
+	for _, tc := range []struct{ name, gomod, want string }{
+		{"monorepo", "module github.com/christopherscot/pokemon/services/pokedex\n\ngo 1.27\n",
+			"github.com/christopherscot/pokemon/services/pokedex"},
+		{"standalone", "module github.com/o/svc\n", "github.com/o/svc"},
+		{"no go.mod", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.gomod != "" {
+				if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(tc.gomod), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := moduleFromGoMod(dir); got != tc.want {
+				t.Errorf("moduleFromGoMod = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The owner comes from the git remote, which carries GitHub's canonical
+// casing. go.mod is lowercase by convention, and npm compares
+// repository.url against the OIDC claim literally - so taking the owner
+// from go.mod alone publishes a package that can never verify.
+func TestOwnerFromRemoteKeepsGitHubCasing(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"remote", "add", "origin", "https://github.com/ChristopherScot/pokemon.git"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git unavailable: %v: %s", err, out)
+		}
+	}
+	if got := ownerFromRemote(dir); got != "ChristopherScot" {
+		t.Errorf("ownerFromRemote = %q, want ChristopherScot", got)
+	}
+
+	// ssh remotes too, which is what a cloned repo often has.
+	exec.Command("git", "-C", dir, "remote", "set-url", "origin",
+		"git@github.com:ChristopherScot/pokemon.git").Run()
+	if got := ownerFromRemote(dir); got != "ChristopherScot" {
+		t.Errorf("ssh remote: ownerFromRemote = %q, want ChristopherScot", got)
 	}
 }
