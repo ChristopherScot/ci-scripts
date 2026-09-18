@@ -19,7 +19,7 @@ import (
 // that actually reaches the cluster was never shown to anyone before it
 // landed. This prints it.
 func diffCmd() *cobra.Command {
-	var against, imageRef, repoURL string
+	var against, repoURL string
 	cmd := &cobra.Command{
 		Use:   "diff",
 		Short: "show what rendering would change in the GitOps repo",
@@ -32,18 +32,15 @@ func diffCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runDiff(path, against, imageRef, repoURL)
+			return runDiff(path, against, repoURL)
 		},
 	}
 	cmd.Flags().StringVar(&against, "against", "", "GitOps repo checkout to compare with (default: $HOMELAB_REPO or ~/homelab)")
-	// The image is not what a review is about, and rendering needs one, so
-	// default to the tag the deployed manifest already carries.
-	cmd.Flags().StringVar(&imageRef, "image", "", "image ref to render with (image refs are not compared)")
 	cmd.Flags().StringVar(&repoURL, "repo-url", "https://github.com/ChristopherScot/homelab", "repo the Application syncs from")
 	return cmd
 }
 
-func runDiff(cfgPath, against, imageRef, repoURL string) error {
+func runDiff(cfgPath, against, repoURL string) error {
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -64,9 +61,6 @@ func runDiff(cfgPath, against, imageRef, repoURL string) error {
 		return fmt.Errorf("%s does not exist; this service is not in %s yet", dir, against)
 	}
 
-	if imageRef == "" {
-		imageRef = c.Image.Repository + ":latest"
-	}
 	outs, err := render.All(c)
 	if err != nil {
 		return err

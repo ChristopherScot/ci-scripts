@@ -241,17 +241,6 @@ func artifactParams(c *config.Config, owner, parentRepo string) runtime.Params {
 	return p
 }
 
-// mustCwd is the working directory, or "." when it cannot be determined -
-// in which case the caller's comparison simply fails and the old
-// behaviour applies.
-func mustCwd() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return wd
-}
-
 // modulePath is where Go will fetch this service from.
 //
 // Not a preference: Go requires a module's path to match its location, so
@@ -455,7 +444,7 @@ func overwritable(path string) bool {
 // An unknown name used to be a silent no-op: `--overwrite mian.go`
 // exited 0 having done nothing, and the file appeared under "kept" with
 // no hint it had been asked for.
-func checkOverwrite(want, scaffolding map[string]bool, a runtime.Artifacts, r runtime.Runtime, c *config.Config, o initOpts) error {
+func checkOverwrite(want, scaffolding map[string]bool) error {
 	var unknown []string
 	for p := range want {
 		if !scaffolding[p] {
@@ -525,7 +514,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	for _, out := range manifests {
 		scaffolding[filepath.Join("deploy", c.Name, out.Path)] = true
 	}
-	if err := checkOverwrite(o.overwrite, scaffolding, a, r, c, o); err != nil {
+	if err := checkOverwrite(o.overwrite, scaffolding); err != nil {
 		return err
 	}
 

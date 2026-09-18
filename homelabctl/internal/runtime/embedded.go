@@ -60,9 +60,8 @@ type embedded struct {
 	//
 	// This was three maps - files, specFiles and specSwaps - keyed on
 	// the same template names and aligned by hand. A typo in one of the
-	// parallel keys was silent: SpecFiles() looked the name up in files,
-	// got "" for a key that was not there, and published an empty path
-	// through the Runtime interface for check and regen to act on.
+	// parallel keys was silent: a name that was not in files resolved
+	// to "", so a spec-only file was written to an empty path.
 	// One map cannot disagree with itself.
 	files map[string]tmpl
 }
@@ -80,17 +79,6 @@ func (e embedded) Generate(p Params) [][]string {
 	return e.generate
 }
 
-// SpecFiles are the destination paths that exist only with a spec.
-func (e embedded) SpecFiles() []string {
-	var out []string
-	for _, t := range e.files {
-		if t.specOnly {
-			out = append(out, t.dst)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
 func (e embedded) Lock() [][]string    { return e.lock }
 func (e embedded) Upgrade() [][]string { return e.upgrade }
 

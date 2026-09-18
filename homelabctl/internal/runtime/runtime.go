@@ -129,12 +129,6 @@ type Runtime interface {
 	// go-service, node-service, go-cli.
 	Name() string
 
-	// SpecFiles are the paths Artifacts writes only when Params.Spec is
-	// set - the spec, its generator config and everything generated from
-	// it. Named here so `check` and `regen` can ask what a specless
-	// service legitimately lacks rather than each keeping its own list.
-	SpecFiles() []string
-
 	// Artifacts are everything a new repo of this runtime starts with.
 	// A containerised runtime must produce an image that runs as uid 65532
 	// or set SupportsHardened false - otherwise the pod cannot exec its

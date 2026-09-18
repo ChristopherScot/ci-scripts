@@ -963,21 +963,25 @@ func TestCLIMainDocumentsItsCouplings(t *testing.T) {
 
 // The three parallel maps this replaced - files, specFiles, specSwaps -
 // were keyed on the same template names and aligned by hand. A typo in
-// one was silent: SpecFiles() looked the name up in files, got "" for a
-// key that was not there, and published an empty path through the
-// Runtime interface for check and regen to act on.
+// one was silent: a name absent from files resolved to "", so a
+// spec-only file was written to an empty destination.
 //
-// One map per template cannot disagree with itself, and this asserts
-// the property rather than the shape.
-func TestSpecFilesNeverPublishesAnEmptyPath(t *testing.T) {
+// Artifacts consults specOnly to decide what a specless service skips,
+// so the pairing has to hold for every spec-only entry. One map per
+// template cannot disagree with itself; this asserts the property.
+func TestEverySpecOnlyTemplateHasADestination(t *testing.T) {
 	for _, name := range Names() {
 		r, err := Get(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, p := range r.SpecFiles() {
-			if p == "" {
-				t.Errorf("%s: SpecFiles contains an empty path", name)
+		e, ok := r.(embedded)
+		if !ok {
+			continue // a runtime that is not template-backed has no map
+		}
+		for src, tm := range e.files {
+			if tm.specOnly && tm.dst == "" {
+				t.Errorf("%s: spec-only template %q has no destination", name, src)
 			}
 		}
 	}
