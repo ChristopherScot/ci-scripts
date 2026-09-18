@@ -1,12 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
@@ -113,7 +109,7 @@ vault write auth/kubernetes/role/%s \
 // replace-on-write, so this is idempotent: running it twice leaves the
 // same state as running it once.
 func applyVault(c *config.Config) error {
-	token, err := vaultToken()
+	token, err := vault.Token()
 	if err != nil {
 		return err
 	}
@@ -138,20 +134,3 @@ func applyVault(c *config.Config) error {
 
 // vaultToken reads the token to authenticate with, preferring the
 // environment so callers can supply a narrower one than root.
-func vaultToken() (string, error) {
-	if t := os.Getenv("VAULT_TOKEN"); t != "" {
-		return t, nil
-	}
-	out, err := exec.Command("op", "read", "op://Employee/homelab-vault-root/password").Output()
-	if err != nil {
-		// op explains itself on stderr - not signed in, item renamed,
-		// wrong vault - and Output() hides that behind "exit status 1".
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return "", fmt.Errorf("no VAULT_TOKEN set and reading one from 1Password failed: %s",
-				bytes.TrimSpace(ee.Stderr))
-		}
-		return "", fmt.Errorf("no VAULT_TOKEN set and could not read one from 1Password: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
