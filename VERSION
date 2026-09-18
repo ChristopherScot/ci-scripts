@@ -1,4 +1,6 @@
-v1.3.1
+v1.3.2
+
+v1.3.2 spec tagging is idempotent, so a failed build no longer skips a release
 
 v1.3.1 generated clients re-export their schema types; duration_ms is not truncated
 
