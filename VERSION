@@ -1,4 +1,6 @@
-v1.7.0
+v1.7.1
+
+v1.7.1 a failed scaffold and a failed PR stop reporting success
 
 v1.7.0 check cross-references kustomization.yaml against the directory
 

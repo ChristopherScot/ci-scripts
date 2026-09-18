@@ -14,6 +14,7 @@ package main
 // same reason app-of-apps syncs with selfHeal but not prune.
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -150,14 +151,30 @@ func openGitOpsPR(name, entry string) (string, error) {
 			"A stale entry renders an Application with fields the template expects and the " +
 			"file does not carry."
 	}
-	pr, err := exec.Command("gh", "pr", "create",
+	cmd := exec.Command("gh", "pr", "create",
 		"--repo", slug, "--head", branch, "--base", "main",
 		"--title", title, "--body", prBody,
-	).Output()
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	pr, err := cmd.Output()
 	if err != nil {
-		// The PR may already exist from an earlier run, which is not a
-		// failure - the file is on the branch either way.
-		return "", nil
+		// Only "it already exists" is not a failure.
+		//
+		// This used to return ("", nil) for ANY error, and the caller
+		// prints that as "<name> is already registered with Argo" - so
+		// an expired token, a network outage and a rate limit all
+		// reported success. The file is pushed to the branch by then,
+		// so nothing else would have noticed either.
+		//
+		// gh says "a pull request for branch ... already exists"; the
+		// message is matched rather than the exit code because gh uses
+		// 1 for everything.
+		if strings.Contains(stderr.String(), "already exists") {
+			return "", nil
+		}
+		return "", fmt.Errorf("opening the PR on %s: %w\n%s",
+			slug, err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(string(pr)), nil
 }

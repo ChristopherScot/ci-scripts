@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -183,10 +184,29 @@ func runInit(o initOpts) error {
 	if o.parentRepo != "" {
 		target = filepath.Join(dir, "services", o.name)
 	}
-	if err := setupLocal(o, c, r, target); err != nil {
-		return fmt.Errorf("local setup: %w", err)
+	// setupLocal returns a tidy failure rather than aborting on it: the
+	// files are written and running again resolves them, so exiting
+	// non-zero mid-scaffold would leave a tree the user cannot tell the
+	// state of.
+	//
+	// It is printed AFTER the next-steps text, because that text was
+	// what buried it - a one-line warning on stderr followed by the
+	// "created:" list and a cheerful "what's next" reads as a success.
+	// Without a go.sum Go refuses to build at all, so the first thing
+	// the user does is the thing that fails.
+	tidyErr := setupLocal(o, c, r, target)
+	if tidyErr != nil && !errors.Is(tidyErr, errDepsUnresolved) {
+		return fmt.Errorf("local setup: %w", tidyErr)
 	}
 	printNext(o, c, target, isCLI)
+	if tidyErr != nil {
+		fmt.Println()
+		fmt.Fprintf(os.Stderr, "WARNING: dependencies did not resolve, so this tree will not build yet.\n")
+		fmt.Fprintf(os.Stderr, "  cd %s && go mod tidy\n", target)
+		// tidyErr itself: errors.Unwrap on a two-verb %w wrap returns
+		// nil, and the sentinel prefix reads fine inline.
+		fmt.Fprintf(os.Stderr, "  (%v)\n", tidyErr)
+	}
 	return nil
 }
 
@@ -704,6 +724,8 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	}
 
 	var written, skipped, overwritten []string
+	// Deferred to the end of the run; see where it is set.
+	var tidyErr error
 
 	put := func(path, body string) error {
 		full := filepath.Join(dir, path)
@@ -820,7 +842,22 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// Generate first - a lockfile cannot resolve an import that does
 		// not exist yet - then upgrade, then lock what that settled on.
 	} else if err := run(dir, r.Generate(artifactParams(c, o.owner, o.parentRepo)), r.Upgrade(), r.Lock()); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		err = fmt.Errorf("%w: %w", errDepsUnresolved, err)
+		// Recorded, not just warned about.
+		//
+		// This is one line on stderr, and the "created:" list plus the
+		// next-steps text print after it - so the failure scrolls away
+		// and the run reads as a success. Without a go.sum Go refuses to
+		// build at all, so the scaffold is dead on arrival: the first
+		// thing the user does is the thing that fails, with no hint that
+		// init already knew.
+		//
+		// Still not fatal. The files are on disk and running again
+		// resolves them; exiting non-zero here would leave a scaffold
+		// the user cannot tell the state of. It is reported at the END
+		// instead, after the file lists, where it is the last thing on
+		// screen.
+		tidyErr = err
 	}
 
 	if len(overwritten) > 0 {
@@ -842,8 +879,15 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 			fmt.Println("  " + filepath.Join(dir, p))
 		}
 	}
-	return nil
+
+	return tidyErr
 }
+
+// errDepsUnresolved marks a scaffold that was written but whose
+// dependencies did not resolve. The files are fine; the tree does not
+// build yet. Distinguished from a real setup failure so run() can
+// report it after the next-steps text rather than aborting on it.
+var errDepsUnresolved = errors.New("dependencies did not resolve")
 
 func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 	fmt.Println()
