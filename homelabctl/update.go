@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 )
 
 // Version is set at build time via ldflags; "dev" for local builds, which
@@ -54,8 +55,10 @@ func runUpdate(checkOnly bool) error {
 	// working-tree build with a release is never what they want. Checked
 	// before the network call so the message is the real reason rather
 	// than whatever the API happens to say.
-	current := strings.TrimPrefix(Version, "v")
-	if current == "dev" {
+	// semver wants the leading v, so normalise toward it rather than
+	// stripping it off and putting it back.
+	current := ensureV(Version)
+	if Version == "dev" {
 		fmt.Println("running a dev build; not updating")
 		return nil
 	}
@@ -64,7 +67,7 @@ func runUpdate(checkOnly bool) error {
 	if err != nil {
 		return fmt.Errorf("check for updates: %w", err)
 	}
-	latest := strings.TrimPrefix(rel.TagName, "v")
+	latest := ensureV(rel.TagName)
 	if !isNewer(latest, current) {
 		fmt.Println("already up to date")
 		return nil
@@ -109,20 +112,39 @@ func latestRelease() (*githubRelease, error) {
 	return &rel, nil
 }
 
-func isNewer(latest, current string) bool {
-	l, c := strings.Split(latest, "."), strings.Split(current, ".")
-	for i := 0; i < len(l) && i < len(c); i++ {
-		// A non-numeric component (a prerelease suffix, say) parses as 0
-		// rather than blocking the comparison: a malformed tag should not
-		// stop someone updating.
-		var ln, cn int
-		_, _ = fmt.Sscanf(l[i], "%d", &ln)
-		_, _ = fmt.Sscanf(c[i], "%d", &cn)
-		if ln != cn {
-			return ln > cn
-		}
+// ensureV normalises a version toward the leading "v" that
+// golang.org/x/mod/semver requires. Release tags carry it and ldflags
+// may not, so accept either spelling.
+func ensureV(v string) string {
+	if strings.HasPrefix(v, "v") {
+		return v
 	}
-	return len(l) > len(c)
+	return "v" + v
+}
+
+// isNewer reports whether latest supersedes current.
+//
+// This delegates to x/mod/semver rather than comparing components by
+// hand. The hand-rolled version parsed each dotted component with
+// Sscanf("%d") and compared them pairwise, which got 1.10.0 wrong: it
+// read the components left to right and returned on the first that
+// differed, but "2" vs "10" only compares correctly as integers if the
+// parse succeeds - and the same loop treated any unparseable component
+// as 0, so a prerelease suffix silently compared equal to the release.
+//
+// semver.Compare is the same comparison the go command uses, including
+// the precedence rule that a prerelease sorts BEFORE its release.
+//
+// An unparseable version returns false: better to leave someone on a
+// working binary than to talk them into replacing it based on a
+// comparison that did not mean anything. semver.IsValid is what makes
+// that distinguishable from "not newer", which the Sscanf version could
+// not tell apart.
+func isNewer(latest, current string) bool {
+	if !semver.IsValid(latest) || !semver.IsValid(current) {
+		return false
+	}
+	return semver.Compare(latest, current) > 0
 }
 
 // installFrom replaces the running binary. The rename dance matters: a

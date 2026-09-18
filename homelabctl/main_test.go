@@ -54,15 +54,53 @@ func TestIsNewer(t *testing.T) {
 	for _, tc := range []struct {
 		latest, current string
 		want            bool
+		why             string
 	}{
-		{"1.2.0", "1.1.0", true},
-		{"1.1.0", "1.2.0", false},
-		{"1.1.0", "1.1.0", false},
-		{"1.1.1", "1.1", true},
+		{"v1.2.0", "v1.1.0", true, "ordinary bump"},
+		{"v1.1.0", "v1.2.0", false, "older is not newer"},
+		{"v1.1.0", "v1.1.0", false, "equal is not newer"},
+		{"v1.1.1", "v1.1", true, "an omitted patch reads as .0"},
+
+		// The bug that motivated using x/mod/semver. Comparing dotted
+		// components pairwise made 10 sort below 2, so once any
+		// component reached double digits update went quiet: it
+		// reported "already up to date" forever.
+		{"v1.10.0", "v1.2.0", true, "10 is newer than 2, not older"},
+		{"v1.2.0", "v1.10.0", false, "and the reverse still holds"},
+		{"v2.0.0", "v1.99.99", true, "major wins over any minor"},
+
+		// A prerelease sorts before its release, so someone on a release
+		// is never offered an rc, and someone on an rc is offered the
+		// release.
+		{"v1.0.0", "v1.0.0-rc1", true, "release supersedes its rc"},
+		{"v1.0.0-rc1", "v1.0.0", false, "an rc does not supersede the release"},
+
+		// A version that does not parse yields false rather than a
+		// meaningless comparison: leaving someone on a working binary
+		// beats talking them into replacing it.
+		{"not-a-version", "v1.0.0", false, "unparseable latest"},
+		{"v1.0.0", "garbage", false, "unparseable current"},
+		{"dev", "v1.0.0", false, "a dev build is not a version"},
 	} {
 		if got := isNewer(tc.latest, tc.current); got != tc.want {
-			t.Errorf("isNewer(%q, %q) = %v, want %v", tc.latest, tc.current, got, tc.want)
+			t.Errorf("isNewer(%q, %q) = %v, want %v (%s)",
+				tc.latest, tc.current, got, tc.want, tc.why)
 		}
+	}
+}
+
+// The caller hands isNewer whatever the tag and the ldflags say, which
+// may or may not carry a v. Both spellings must reach semver the same
+// way, because semver.IsValid rejects the unprefixed one - and an
+// invalid version means "not newer", i.e. update would go silent.
+func TestEnsureVAcceptsEitherSpelling(t *testing.T) {
+	for _, in := range []string{"1.2.3", "v1.2.3"} {
+		if got := ensureV(in); got != "v1.2.3" {
+			t.Errorf("ensureV(%q) = %q, want %q", in, got, "v1.2.3")
+		}
+	}
+	if !isNewer(ensureV("1.10.0"), ensureV("v1.2.0")) {
+		t.Error("a mixed-spelling comparison did not reach semver intact")
 	}
 }
 

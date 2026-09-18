@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -52,8 +53,10 @@ func runUpdate(checkOnly bool) error {
 	// working-tree build with a release is never what they want. Checked
 	// before the network call so the message is the real reason rather
 	// than whatever the API happens to say.
-	current := strings.TrimPrefix(Version, "v")
-	if current == "dev" {
+	// semver wants the leading v, so normalise toward it rather than
+	// stripping it off and putting it back.
+	current := ensureV(Version)
+	if Version == "dev" {
 		fmt.Println("running a dev build; not updating")
 		return nil
 	}
@@ -62,7 +65,7 @@ func runUpdate(checkOnly bool) error {
 	if err != nil {
 		return fmt.Errorf("check for updates: %w", err)
 	}
-	latest := strings.TrimPrefix(rel.TagName, "v")
+	latest := ensureV(rel.TagName)
 	if !isNewer(latest, current) {
 		fmt.Println("already up to date")
 		return nil
@@ -107,17 +110,35 @@ func latestRelease() (*githubRelease, error) {
 	return &rel, nil
 }
 
-func isNewer(latest, current string) bool {
-	l, c := strings.Split(latest, "."), strings.Split(current, ".")
-	for i := 0; i < len(l) && i < len(c); i++ {
-		var ln, cn int
-		_, _ = fmt.Sscanf(l[i], "%d", &ln)
-		_, _ = fmt.Sscanf(c[i], "%d", &cn)
-		if ln != cn {
-			return ln > cn
-		}
+// ensureV normalises a version toward the leading "v" that
+// golang.org/x/mod/semver requires. Release tags carry it and ldflags
+// may not, so accept either spelling.
+func ensureV(v string) string {
+	if strings.HasPrefix(v, "v") {
+		return v
 	}
-	return len(l) > len(c)
+	return "v" + v
+}
+
+// isNewer reports whether latest supersedes current.
+//
+// x/mod/semver rather than a hand-rolled comparison: comparing dotted
+// components pairwise reads "10" as older than "2" unless every
+// component parses as an integer, so a hand-rolled version goes quiet
+// the moment any component reaches double digits - it reports "already
+// up to date" forever, which is the failure mode you never notice.
+//
+// semver.Compare is the same comparison the go command uses, including
+// the rule that a prerelease sorts BEFORE its release.
+//
+// An unparseable version returns false: better to leave someone on a
+// working binary than to talk them into replacing it based on a
+// comparison that did not mean anything.
+func isNewer(latest, current string) bool {
+	if !semver.IsValid(latest) || !semver.IsValid(current) {
+		return false
+	}
+	return semver.Compare(latest, current) > 0
 }
 
 // installFrom replaces the running binary. The rename dance matters: a
