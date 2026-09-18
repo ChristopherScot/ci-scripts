@@ -25,9 +25,9 @@ type Output struct {
 	Body string
 }
 
-// UnknownOverrides returns override keys that name no generated file.
-// Silently ignoring them means an author believes their override applied
-// when it did not.
+// UnknownOverrides returns override keys that name no generated file -
+// a typo like "deploymnet.yaml", which otherwise overrides nothing while
+// the author believes their file is in charge. All rejects them.
 func UnknownOverrides(c *config.Config, outs []Output) []string {
 	if len(c.Overrides) == 0 {
 		return nil
@@ -115,7 +115,52 @@ func All(c *config.Config) ([]Output, error) {
 		return nil, fmt.Errorf("patches name kind(s) this service does not generate: %s (it has: %s)",
 			strings.Join(unknown, ", "), strings.Join(PatchedKinds(out), ", "))
 	}
+	if unknown := UnknownOverrides(c, out); len(unknown) > 0 {
+		return nil, fmt.Errorf("overrides name file(s) this service does not generate: %s (it renders: %s)",
+			strings.Join(unknown, ", "), strings.Join(resourceNames(out), ", "))
+	}
+	if shadowed := ShadowedPatches(c, out); len(shadowed) > 0 {
+		return nil, fmt.Errorf("these patches are shadowed by an override and would not apply: %s\n"+
+			"an override replaces a file wholesale, so a patch for a kind inside it never runs.\n"+
+			"fold the patch into the override, or drop the override and patch the generated file",
+			strings.Join(shadowed, ", "))
+	}
 	return out, nil
+}
+
+// ShadowedPatches reports patches that an override prevents from ever
+// applying, as "Kind (in path)".
+//
+// An override replaces a whole file and a patch targets a kind, so when
+// an override covers the file containing that kind the patch is skipped
+// - previously in silence. That is this package's worst failure mode:
+// render succeeds, Argo reports Synced and Healthy, and the adjustment
+// the author wrote simply is not there.
+//
+// Neither existing check caught it. UnknownPatchKinds asks whether the
+// kind is generated, and it is; the patch just never reaches the output.
+//
+// Kinds are read from the override body rather than the generated one,
+// because the override is what ends up on disk - and a single file can
+// hold several documents, as ingress.yaml does for a split host.
+func ShadowedPatches(c *config.Config, outs []Output) []string {
+	if len(c.Patches) == 0 || len(c.Overrides) == 0 {
+		return nil
+	}
+	var shadowed []string
+	for _, o := range outs {
+		ov, ok := c.Overrides[o.Path]
+		if !ok {
+			continue
+		}
+		for _, kind := range documentKinds(ov) {
+			if _, patched := c.Patches[kind]; patched {
+				shadowed = append(shadowed, fmt.Sprintf("%s (in %s)", kind, o.Path))
+			}
+		}
+	}
+	sort.Strings(shadowed)
+	return shadowed
 }
 
 // UnknownPatchKinds reports patch keys naming a resource kind this service

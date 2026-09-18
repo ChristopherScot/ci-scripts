@@ -388,3 +388,70 @@ func TestExternalSecretUsesTheSharedAPIVersion(t *testing.T) {
 		t.Error("the placeholder survived into the manifest")
 	}
 }
+
+// The failure this package exists to prevent: an override replaces a
+// file wholesale, so a patch naming a kind inside that file never runs.
+// It used to happen in silence - render succeeded, Argo reported Synced
+// and Healthy, and the annotation the author wrote was simply absent.
+//
+// Neither existing check caught it: UnknownPatchKinds asks whether the
+// kind is generated, and Deployment is.
+func TestOverrideShadowingAPatchIsAnError(t *testing.T) {
+	c := base()
+	c.Patches = map[string]string{
+		"Deployment": "metadata:\n  annotations:\n    example.com/x: \"1\"\n",
+	}
+	c.Overrides = map[string]string{
+		"deployment.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: svc\n",
+	}
+	_, err := All(mustConfig(t, c))
+	if err == nil {
+		t.Fatal("an override swallowed a patch and render reported success")
+	}
+	// Name both halves: which patch, and which file ate it.
+	for _, want := range []string{"Deployment", "deployment.yaml"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// Overrides and patches coexist as long as they do not touch the same
+// file - that is the ordinary case, and making the collision an error
+// must not make the whole combination one.
+func TestOverrideAndPatchOnDifferentFilesBothApply(t *testing.T) {
+	c := base()
+	c.Patches = map[string]string{
+		"Service": "metadata:\n  annotations:\n    example.com/svc: \"1\"\n",
+	}
+	c.Overrides = map[string]string{
+		"deployment.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: svc\n",
+	}
+	var svc string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if o.Path == "service.yaml" {
+			svc = o.Body
+		}
+	}
+	if !strings.Contains(svc, "example.com/svc") {
+		t.Errorf("the Service patch did not apply:\n%s", svc)
+	}
+}
+
+// A misspelt override path overrides nothing, while the author believes
+// their file is in charge of that manifest. UnknownOverrides could
+// already see this; nothing called it, so render accepted the typo.
+func TestOverrideNamingNoGeneratedFileIsAnError(t *testing.T) {
+	c := base()
+	c.Overrides = map[string]string{"deploymnet.yaml": "kind: Deployment\n"}
+	_, err := All(mustConfig(t, c))
+	if err == nil {
+		t.Fatal("a misspelt override path was accepted")
+	}
+	// The typo and a real path, so the fix is readable from the error.
+	for _, want := range []string{"deploymnet.yaml", "deployment.yaml"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}

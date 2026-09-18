@@ -141,14 +141,8 @@ func mappingNode(m *yaml.Node, key string) *yaml.Node {
 func PatchedKinds(outs []Output) []string {
 	seen := map[string]bool{}
 	for _, o := range outs {
-		for _, doc := range strings.Split(o.Body, "\n---\n") {
-			var node map[string]any
-			if yaml.Unmarshal([]byte(doc), &node) != nil {
-				continue
-			}
-			if k, ok := node["kind"].(string); ok && k != "" {
-				seen[k] = true
-			}
+		for _, k := range documentKinds(o.Body) {
+			seen[k] = true
 		}
 	}
 	kinds := make([]string, 0, len(seen))
@@ -156,5 +150,28 @@ func PatchedKinds(outs []Output) []string {
 		kinds = append(kinds, k)
 	}
 	sort.Strings(kinds)
+	return kinds
+}
+
+// documentKinds lists the `kind:` of every YAML document in body, in the
+// order they appear. A file holds more than one when a resource is split
+// - ingress.yaml carries two Ingresses when the hosts cannot share a
+// certificate - so a caller asking "what is in this file" has to see all
+// of them.
+//
+// A document that does not parse is skipped rather than reported: this
+// answers a question about content, and the callers that must reject bad
+// YAML do so where it is generated or patched.
+func documentKinds(body string) []string {
+	var kinds []string
+	for _, doc := range strings.Split(body, "\n---\n") {
+		var node map[string]any
+		if yaml.Unmarshal([]byte(doc), &node) != nil {
+			continue
+		}
+		if k, ok := node["kind"].(string); ok && k != "" {
+			kinds = append(kinds, k)
+		}
+	}
 	return kinds
 }
