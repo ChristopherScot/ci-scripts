@@ -1,4 +1,6 @@
-v1.6.0
+v1.6.1
+
+v1.6.1 a manifest cannot take a generated file's name, and every document is validated
 
 v1.6.0 diff compares against deploy/, where the manifests actually live
 

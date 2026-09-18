@@ -56,7 +56,9 @@ package render
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -218,7 +220,37 @@ func All(c *config.Config, src Source) ([]Output, error) {
 	// and an override replacing a file the author already wrote by hand
 	// is just a second copy of it - both would be silent no-ops of
 	// exactly the kind ShadowedPatches exists to catch.
+	// Names already spoken for, so a hand-written manifest cannot take
+	// one. Nothing checked this, and the consequences were silent:
+	//
+	//   manifests: [service.yaml]  - written second, so it REPLACED the
+	//     generated Service on disk and appeared twice in resources:.
+	//     kustomize then refused the whole directory, and under
+	//     prune: true Argo deletes the live Service.
+	//   manifests: [argocd.json]   - excluded from resources: by design
+	//     AND overwritten by the generated entry, so the resource
+	//     existed nowhere. render, check and kustomize all reported
+	//     success and the user got nothing.
+	//
+	// Both printed "wrote <path>" twice and exited 0.
+	taken := map[string]string{
+		"kustomization.yaml": "lists the other manifests",
+		AppEntryFile:         "is the Argo generator input",
+	}
+	for _, o := range out {
+		taken[o.Path] = "is generated from config.yaml"
+	}
+	seen := map[string]bool{}
+
 	for _, name := range c.Manifests {
+		if why, clash := taken[name]; clash {
+			return nil, fmt.Errorf("manifest %q collides with a file that %s; rename it", name, why)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("manifest %q is listed twice", name)
+		}
+		seen[name] = true
+
 		body, ok := src.Manifests[name]
 		if !ok {
 			// A named file that was never read is a typo or a deleted
@@ -334,20 +366,40 @@ func UnknownPatchKinds(c *config.Config, outs []Output) []string {
 // CRD it has never heard of is the point. This catches the file that is
 // not a manifest at all, which is the mistake that actually happens.
 func validManifest(name, body string) error {
+	// A real YAML decoder, not strings.Split(body, "\n---\n").
+	//
+	// The split misses the separator whenever the file is not in exactly
+	// that shape - CRLF line endings make it "---\r", and "--- " or
+	// "--- # note" do not match either. yaml.Unmarshal then decodes only
+	// the FIRST document of the stream and returns nil, so everything
+	// after it went unvalidated and unreported.
+	//
+	// A file edited on Windows with a bad second document therefore
+	// passed render and check, and kustomize refused the whole
+	// directory - the Deployment and Service failed to sync along with
+	// it. This function's own error text names that consequence, which
+	// it was failing to prevent.
+	dec := yaml.NewDecoder(strings.NewReader(body))
 	docs := 0
-	for _, doc := range strings.Split(body, "\n---\n") {
-		if strings.TrimSpace(doc) == "" {
-			continue
-		}
+	for {
 		var node map[string]any
-		if err := yaml.Unmarshal([]byte(doc), &node); err != nil {
+		err := dec.Decode(&node)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
 			return fmt.Errorf("manifest %s: %w", name, err)
 		}
-		if node["apiVersion"] == nil || node["kind"] == nil {
-			return fmt.Errorf("manifest %s: document %d has no apiVersion/kind, "+
-				"so applying it would fail the whole sync", name, docs+1)
+		// A document that is only comments decodes to nothing; it is
+		// not a resource and not an error.
+		if node == nil {
+			continue
 		}
 		docs++
+		if node["apiVersion"] == nil || node["kind"] == nil {
+			return fmt.Errorf("manifest %s: document %d has no apiVersion/kind, "+
+				"so applying it would fail the whole sync", name, docs)
+		}
 	}
 	if docs == 0 {
 		return fmt.Errorf("manifest %s is empty", name)

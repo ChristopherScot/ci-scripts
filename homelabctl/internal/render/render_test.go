@@ -789,3 +789,91 @@ func TestFilesNeedsNoSource(t *testing.T) {
 		t.Errorf("Files omits %s", AppEntryFile)
 	}
 }
+
+// A manifest may not take the name of a file render generates.
+//
+// Nothing checked this, and every variant was silent. A hand-written
+// service.yaml was appended AFTER the generated one, so it replaced it
+// on disk and appeared twice in resources: - kustomize refused the
+// directory, and under prune: true Argo deletes the live Service. A
+// hand-written argocd.json was excluded from resources: by design and
+// then overwritten by the generated entry, so the resource existed
+// nowhere at all. Both printed "wrote <path>" twice and exited 0, and
+// `check` reported "deploy manifests OK".
+func TestManifestsCannotCollideWithGeneratedFiles(t *testing.T) {
+	const doc = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"
+	for _, name := range []string{
+		"service.yaml",       // generated for a plain service
+		"deployment.yaml",    // generated for a plain service
+		"kustomization.yaml", // lists the others
+		"argocd.json",        // the Argo generator input
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := config.Defaults()
+			c.Name = "svc"
+			c.Team = "platform"
+			c.Runtime = "go"
+			c.Port = 8080
+			c.Image.Repository = "ghcr.io/example/svc"
+			c.Manifests = []string{name}
+
+			_, err := All(&c, Source{Manifests: map[string]string{name: doc}})
+			if err == nil {
+				t.Fatalf("%s was accepted; it silently replaces or loses a resource", name)
+			}
+		})
+	}
+}
+
+// The same file listed twice renders twice into resources:, which
+// kustomize rejects as a duplicate id.
+func TestManifestsRejectDuplicates(t *testing.T) {
+	c := config.Defaults()
+	c.Name = "svc"
+	c.Team = "platform"
+	c.Runtime = "go"
+	c.Port = 8080
+	c.Image.Repository = "ghcr.io/example/svc"
+	c.Manifests = []string{"db.yaml", "db.yaml"}
+
+	_, err := All(&c, Source{Manifests: map[string]string{
+		"db.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: db\n",
+	}})
+	if err == nil {
+		t.Fatal("a manifest listed twice was accepted")
+	}
+}
+
+// Every document in a multi-document file has to be validated, whatever
+// the file's line endings.
+//
+// validManifest used to split on the literal "\n---\n". CRLF makes the
+// separator "---\r" and a trailing space makes it "--- ", so the split
+// never fired - and yaml.Unmarshal then decodes only the FIRST document
+// of a stream and returns nil. Everything after it went unchecked, so a
+// file edited on Windows passed render and check, and kustomize refused
+// the whole directory.
+func TestValidManifestSeesEveryDocument(t *testing.T) {
+	const good = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ok\n"
+	const bad = "this is: not a manifest\n"
+
+	for _, tc := range []struct{ name, sep string }{
+		{"unix", "\n---\n"},
+		{"crlf", "\r\n---\r\n"},
+		{"trailing space", "\n--- \n"},
+		{"comment after marker", "\n--- # note\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := good + tc.sep + bad
+			if err := validManifest("db.yaml", body); err == nil {
+				t.Errorf("second document went unvalidated with %q separator", tc.sep)
+			}
+		})
+	}
+
+	// And a genuinely valid multi-document file still passes.
+	both := good + "\n---\n" + "apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\n"
+	if err := validManifest("db.yaml", both); err != nil {
+		t.Errorf("a valid two-document manifest was rejected: %v", err)
+	}
+}
