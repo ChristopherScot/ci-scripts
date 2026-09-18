@@ -96,3 +96,18 @@ func TestViewShowsHowToQuit(t *testing.T) {
 		t.Errorf("view does not say how to quit:\n%s", content)
 	}
 }
+
+// Lip Gloss v2 removed AdaptiveColor, so components no longer detect the
+// terminal background themselves. Init has to ask, and Update has to
+// restyle when the answer arrives - otherwise the dark defaults stay put
+// and the list is close to unreadable on a light terminal.
+func TestRestylesForALightTerminal(t *testing.T) {
+	m, _ := newModel().Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	dark := m.(model).View().Content
+
+	light, _ := m.(model).Update(tea.BackgroundColorMsg{Color: lipgloss.White})
+	if got := light.(model).View().Content; got == dark {
+		t.Error("view is identical on a light and dark terminal; BackgroundColorMsg is not restyling anything")
+	}
+}

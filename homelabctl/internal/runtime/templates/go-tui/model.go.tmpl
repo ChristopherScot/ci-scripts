@@ -53,7 +53,9 @@ func newModel() model {
 	// terminal size at startup and delivers a WindowSizeMsg BEFORE the
 	// first render, so the real dimensions always arrive before anything
 	// is drawn and a placeholder size would only ever be wrong.
-	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
+	// Dark styles to begin with, replaced as soon as the terminal
+	// answers RequestBackgroundColor in Init.
+	l := list.New(items, newDelegate(true), 0, 0)
 	l.Title = "{{ .Name }}"
 
 	// q is handled in Update, so the list does not know about it; without
@@ -67,17 +69,42 @@ func newModel() model {
 	return model{list: l}
 }
 
-// Init runs once, before the first render. Return a tea.Cmd here to do
-// startup work - loading from a file or an API - and handle the message
-// it produces in Update. Returning nil means "nothing to do".
+// newDelegate builds the row renderer for a light or dark terminal.
+// One function, because the delegate is created in two places - at
+// startup and again when the terminal reports its background - and they
+// have to match.
+func newDelegate(isDark bool) list.DefaultDelegate {
+	d := list.NewDefaultDelegate()
+	d.Styles = list.NewDefaultItemStyles(isDark)
+	return d
+}
+
+// Init runs once, before the first render.
+//
+// RequestBackgroundColor asks the terminal whether it is light or dark.
+// Lip Gloss v2 removed AdaptiveColor, so components no longer detect
+// this themselves - without asking, the list keeps its dark defaults and
+// is close to unreadable on a light terminal.
+//
+// Add your own startup work here with tea.Batch: it returns a Cmd that
+// runs several at once, and each reports back as its own message.
 func (m model) Init() tea.Cmd {
-	return nil
+	return tea.RequestBackgroundColor
 }
 
 // Update handles one message and returns the next state. It must not
 // block: anything slow belongs in a tea.Cmd.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		// The answer to RequestBackgroundColor. Restyle every component
+		// that has light and dark variants; a component created before
+		// this arrives keeps the dark defaults until it does.
+		isDark := msg.IsDark()
+		m.list.Styles = list.DefaultStyles(isDark)
+		m.list.SetDelegate(newDelegate(isDark))
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		// Subtract the frame appStyle adds, so the list fills exactly
 		// what is left rather than overflowing by the padding.
