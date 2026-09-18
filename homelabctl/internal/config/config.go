@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -256,6 +257,40 @@ func IngressHosts(names ...string) []IngressHost {
 		out = append(out, IngressHost{Name: n, TLS: Certifiable(n)})
 	}
 	return out
+}
+
+// vaultPathProblem reports why a vaultPath cannot be used, or "" when
+// it is fine.
+//
+// This is not a trust boundary - authors are teammates, and the rule
+// would not stop one who meant it. It catches typos, because both
+// consumers of this field read it as a literal path and neither reports
+// a malformed one anywhere near the config.
+//
+// A wildcard in particular is not "too broad", it is broken. The two
+// readers disagree about what it would mean:
+//
+//   - vaultPolicy interpolates it into `path "kv/data/%s"` and appends
+//     its own `/*`, so "shlink/*" yields the nonsense kv/data/shlink/*/*.
+//   - the ExternalSecret's remoteRef.key is a literal key for ESO to
+//     fetch. ESO does not glob it, so "shlink/*" asks Vault for a secret
+//     by that name, finds nothing, and fails at sync time - in the
+//     cluster, long after validate passed.
+//
+// A service that genuinely needs a grant wider than the key it reads
+// wants a second field, not a glob smuggled into this one.
+func vaultPathProblem(path string) string {
+	switch {
+	case strings.ContainsAny(path, "*+"):
+		return "contains a wildcard, which neither Vault's policy nor the ExternalSecret's remoteRef reads as one"
+	case strings.HasPrefix(path, "/"), strings.HasSuffix(path, "/"):
+		return "must not start or end with /"
+	case path != filepath.Clean(path):
+		return "must be a plain path with no . or .. segments"
+	case strings.Contains(path, ".."):
+		return "must not traverse upwards"
+	}
+	return ""
 }
 
 // Certifiable reports whether a public CA could issue for this name.
@@ -527,6 +562,20 @@ func (c Config) Validate() error {
 		}
 		if len(c.Secrets.Keys) == 0 {
 			add("secrets.keys must list at least one key")
+		}
+		// The path is interpolated straight into a Vault policy, so a
+		// wildcard here grants read on every secret in the KV mount -
+		// which is the cluster-wide role this convention replaced.
+		//
+		// Not required to equal the service name: a service that fronts
+		// another legitimately reads its secret, as the shlink
+		// redirector reads shlink's API key. What is refused is a path
+		// that names no single literal secret.
+		if bad := vaultPathProblem(c.Secrets.VaultPath); bad != "" {
+			add("secrets.vaultPath %q %s - it is used verbatim as both a Vault "+
+				"policy path and the key ESO fetches, so it must name one "+
+				"literal path",
+				c.Secrets.VaultPath, bad)
 		}
 	}
 	if c.Ingress != nil {

@@ -247,3 +247,35 @@ func TestMultiEntrySecretKeyMappingIsRejected(t *testing.T) {
 		t.Fatal("a two-entry mapping was accepted")
 	}
 }
+
+// vaultPath is interpolated into a Vault policy, so anything Vault
+// reads as a pattern widens the grant: "*" yields read on every secret
+// in the mount, which is the cluster-wide role the per-app convention
+// exists to replace.
+// Both readers of vaultPath take it literally, so a pattern is not a
+// broad grant - it is a path that resolves to nothing. Refusing it here
+// turns a sync-time failure in the cluster into a validate-time error.
+func TestVaultPathMustNameOneLiteralPath(t *testing.T) {
+	for _, bad := range []string{"*", "shlink/*", "kv/*", "../other", "a/../../b", "/leading", "trailing/"} {
+		c := Defaults()
+		c.Name, c.Team, c.Runtime = "mysvc", "t", "go-service"
+		c.Secrets = &Secrets{VaultPath: bad, Keys: EnvKeys("TOK")}
+		if err := c.Complete(); err == nil {
+			t.Errorf("vaultPath %q was accepted", bad)
+		}
+	}
+}
+
+// A service that fronts another legitimately reads its secret - the
+// shlink redirector reads shlink's api-key - so the path is not
+// required to equal the service name.
+func TestVaultPathMayNameAnotherService(t *testing.T) {
+	for _, ok := range []string{"shlink", "approvald/config", "mysvc", "team/mysvc/config"} {
+		c := Defaults()
+		c.Name, c.Team, c.Runtime = "mysvc", "t", "go-service"
+		c.Secrets = &Secrets{VaultPath: ok, Keys: EnvKeys("TOK")}
+		if err := c.Complete(); err != nil {
+			t.Errorf("vaultPath %q was refused: %v", ok, err)
+		}
+	}
+}

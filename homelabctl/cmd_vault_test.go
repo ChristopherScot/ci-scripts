@@ -10,6 +10,17 @@ import (
 // A policy must never grant more than the service declared. Truncating the
 // path to its first segment meant `shared/myapp/config` granted read on
 // kv/data/shared/* - every service filed under that prefix.
+// Validate refuses a leading or trailing slash now, so the renderer's
+// own trimming is defence in depth rather than the only guard. Tested
+// directly, since a config carrying one no longer loads.
+func TestPolicyTrimsSlashesItIsHandedAnyway(t *testing.T) {
+	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
+		Secrets: &config.Secrets{VaultPath: "/leading/slash/", Keys: config.EnvKeys("K")}}
+	if got := vaultPolicy(c); !strings.Contains(got, `path "kv/data/leading/slash"`) {
+		t.Errorf("policy did not trim the slashes:\n%s", got)
+	}
+}
+
 func TestPolicyNeverGrantsAnAncestorPath(t *testing.T) {
 	for _, tc := range []struct {
 		vaultPath string
@@ -18,7 +29,6 @@ func TestPolicyNeverGrantsAnAncestorPath(t *testing.T) {
 	}{
 		{"approvald/config", "kv/data/approvald/config", []string{"kv/data/approvald/*"}},
 		{"shared/myapp/config", "kv/data/shared/myapp/config", []string{"kv/data/shared/*", "kv/data/shared/myapp/*"}},
-		{"/leading/slash/", "kv/data/leading/slash", nil},
 	} {
 		t.Run(tc.vaultPath, func(t *testing.T) {
 			c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,

@@ -338,3 +338,25 @@ func TestPodMeetsRestrictedWithoutTheNamespaceLabel(t *testing.T) {
 		t.Error("the pod asks to be privileged, which no restricted namespace admits")
 	}
 }
+
+// The reason config refuses a wildcard in vaultPath: it arrives here as
+// remoteRef.key, which ESO fetches literally. Nothing between the config
+// and Vault expands it, so a pattern would name a secret that does not
+// exist and fail at sync time rather than at validate time.
+func TestVaultPathReachesRemoteRefVerbatim(t *testing.T) {
+	c := base()
+	c.Secrets = &config.Secrets{VaultPath: "team/svc/config", Keys: config.EnvKeys("TOK")}
+
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if strings.HasSuffix(o.Path, "externalsecret.yaml") {
+			body = o.Body
+		}
+	}
+	if body == "" {
+		t.Fatal("no externalsecret rendered")
+	}
+	if !strings.Contains(body, "key: team/svc/config") {
+		t.Errorf("vaultPath was not passed through as remoteRef.key:\n%s", body)
+	}
+}
