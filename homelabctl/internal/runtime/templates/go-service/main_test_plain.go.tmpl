@@ -1,0 +1,79 @@
+package main
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func newHandler(t *testing.T) http.Handler {
+	t.Helper()
+	h, err := handler()
+	if err != nil {
+		t.Fatalf("handler() = %v", err)
+	}
+	return h
+}
+
+func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+	return w
+}
+
+// The probe path in deploy/config.yaml. Without a spec, nothing generates
+// this endpoint - so this test is what keeps a hand-edited server.go from
+// silently removing the thing the readinessProbe depends on.
+func TestHealthIsServedForTheProbe(t *testing.T) {
+	w := get(t, newHandler(t), "/health")
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), `"ok"`) {
+		t.Errorf("body = %q, want it to report ok", w.Body.String())
+	}
+}
+
+func TestRootIdentifiesTheService(t *testing.T) {
+	w := get(t, newHandler(t), "/")
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if !strings.Contains(w.Body.String(), `"{{ .Name }}"`) {
+		t.Errorf("body = %q, want it to name the service", w.Body.String())
+	}
+}
+
+func TestMetricsAreExposed(t *testing.T) {
+	h := newHandler(t)
+	get(t, h, "/") // a request to record
+
+	w := get(t, h, "/metrics")
+	if w.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d, want %d", w.Code, http.StatusOK)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `http_requests_total{method="GET",route="root"`) {
+		t.Errorf("no request counter for root:\n%s", body)
+	}
+	if !strings.Contains(body, "go_goroutines") {
+		t.Error("no runtime metrics in /metrics")
+	}
+}
+
+// Without a generated router there is nothing rejecting unrouted requests
+// before they reach the middleware, so this is the test that has to hold
+// the line: every metric label is a literal written in server.go.
+//
+// If you add a route with a path parameter, label it by its PATTERN
+// ("slug"), never by the value.
+func TestRequestPathNeverBecomesALabel(t *testing.T) {
+	h := newHandler(t)
+	get(t, h, "/secret-token-value/deadbeef")
+
+	if body := get(t, h, "/metrics").Body.String(); strings.Contains(body, "deadbeef") {
+		t.Error("a request path reached a metric label")
+	}
+}

@@ -7,117 +7,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/ogen-go/ogen/middleware"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
-	"{{ .Module }}/api"
 )
 
 // version is stamped by CI with -ldflags "-X main.version=...". The
 // fallback is what a local `go build` produces.
 var version = "dev"
-
-// Request metrics, labelled by the spec's operation ID. ogen guarantees
-// it is non-empty and it comes from the spec, so the label set is bounded
-// by the API rather than by whatever a caller puts in the path - which
-// would be unbounded cardinality, and would write request paths into
-// metric labels.
-var (
-	requests = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "http_requests_total",
-		Help: "Requests by operation, method and status.",
-	}, []string{"operation", "method", "status"})
-
-	latency = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "http_request_duration_seconds",
-		Help:    "Request latency by operation and method.",
-		Buckets: prometheus.DefBuckets,
-	}, []string{"operation", "method"})
-)
-
-// service implements the generated api.Handler. Adding an operation to
-// openapi.yml and regenerating makes this fail to compile until the
-// handler exists - that is the point of generating from the spec.
-type service struct{}
-
-func (service) GetHealthz(context.Context) (*api.Health, error) {
-	return &api.Health{Status: api.HealthStatusOk}, nil
-}
-
-func (service) GetRoot(context.Context) (*api.Identity, error) {
-	return &api.Identity{Service: "{{ .Name }}", Version: version}, nil
-}
-
-// NewError renders a handler's error as the spec's Error schema, so a
-// failure is a documented response rather than an empty 500.
-//
-// It also logs it. ogen returns the error to the caller but does not log
-// it, so without this a 500 leaves nothing on the server saying what
-// happened - and the caller only sees the message.
-//
-// What identifies the failing line is wrapping at the point it happens:
-//
-//	return nil, fmt.Errorf("fetching user %s: %w", id, err)
-func (service) NewError(_ context.Context, err error) *api.ErrorStatusCode {
-	slog.Error("handler failed", "err", err)
-
-	return &api.ErrorStatusCode{
-		StatusCode: http.StatusInternalServerError,
-		Response:   api.Error{Message: err.Error()},
-	}
-}
-
-// observe logs and measures every request that reaches a known operation.
-// A request to an unrouted path is rejected by the generated router before
-// this runs, so an arbitrary URL can never become a label or a log field.
-func observe(req middleware.Request, next middleware.Next) (middleware.Response, error) {
-	// The kubelet probes /healthz every few seconds; logging that buries
-	// real traffic and inflates the counters with self-observation.
-	if req.OperationID == "getHealthz" {
-		return next(req)
-	}
-
-	start := time.Now()
-	resp, err := next(req)
-
-	status := strconv.Itoa(http.StatusOK)
-	if err != nil {
-		status = strconv.Itoa(http.StatusInternalServerError)
-	}
-	elapsed := time.Since(start)
-
-	requests.WithLabelValues(req.OperationID, req.Raw.Method, status).Inc()
-	latency.WithLabelValues(req.OperationID, req.Raw.Method).Observe(elapsed.Seconds())
-
-	slog.Info("request",
-		"method", req.Raw.Method,
-		"operation", req.OperationID,
-		"status", status,
-		"duration_ms", elapsed.Milliseconds())
-	return resp, err
-}
-
-// handler mounts the generated API alongside /metrics, which is not in
-// the spec because it is the platform's endpoint rather than this
-// service's API.
-func handler() (http.Handler, error) {
-	srv, err := api.NewServer(service{}, api.WithMiddleware(observe))
-	if err != nil {
-		return nil, err
-	}
-	mux := http.NewServeMux()
-	// The deployment annotates this pod for scraping here; without this
-	// handler those annotations point at a 404.
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/", srv)
-	return mux, nil
-}
 
 func main() {
 	// Every line carries who emitted it. Alloy adds pod and namespace

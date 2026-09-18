@@ -8,7 +8,7 @@ import (
 
 func testParams() Params {
 	return Params{Name: "svc", Module: "github.com/o/svc", Owner: "o", Port: 3000,
-		Image: "ghcr.io/o/svc"}
+		Image: "ghcr.io/o/svc", Spec: true}
 }
 
 // Templates live in files and are only exercised at generate time, so a
@@ -74,7 +74,7 @@ func TestHardenedRuntimesRunAsNonroot(t *testing.T) {
 // A CLI ships a self-update command, which is the reason the shape exists;
 // without it users have no way to get a new version.
 func TestCLIRuntimesShipSelfUpdate(t *testing.T) {
-	p := Params{Name: "mytool", Module: "github.com/o/mytool", Owner: "o", Port: 3000}
+	p := Params{Name: "mytool", Module: "github.com/o/mytool", Owner: "o", Port: 3000, Spec: true}
 	for _, name := range Names() {
 		r, _ := Get(name)
 		a := r.Artifacts(p)
@@ -146,7 +146,7 @@ func TestArtifactsAreDeterministic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get(%q) = %v", name, err)
 		}
-		p := Params{Name: "svc", Module: "example.com/svc", Port: 3000}
+		p := Params{Name: "svc", Module: "example.com/svc", Port: 3000, Spec: true}
 
 		var first []string
 		for i := 0; i < 25; i++ {
@@ -184,7 +184,7 @@ func TestRuntimesDeclareDependencyResolution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get(%q) = %v", name, err)
 		}
-		files := r.Artifacts(Params{Name: "svc", Module: "example.com/svc", Port: 3000}).Files
+		files := r.Artifacts(Params{Name: "svc", Module: "example.com/svc", Port: 3000, Spec: true}).Files
 
 		for _, f := range files {
 			tool, needsLock := manifests[f.Path]
@@ -232,6 +232,7 @@ func TestDeployableRuntimesStampLogContext(t *testing.T) {
 			t.Fatalf("Get(%q) = %v", name, err)
 		}
 		a := r.Artifacts(Params{
+			Spec: true,
 			Name: "svc", Team: "platform",
 			Module: "example.com/svc", Port: 3000,
 		})
@@ -239,14 +240,18 @@ func TestDeployableRuntimesStampLogContext(t *testing.T) {
 			continue // a CLI writes to a terminal, not an aggregator
 		}
 
+		// Across every source file the runtime ships, not one filename:
+		// the property is that the SERVICE does these things, and which
+		// file holds them is an implementation detail that has moved
+		// once already.
 		var entry string
 		for _, f := range a.Files {
-			if f.Path == "main.go" || f.Path == "server.js" {
-				entry = f.Body
+			if strings.HasSuffix(f.Path, ".go") || strings.HasSuffix(f.Path, ".js") {
+				entry += f.Body
 			}
 		}
 		if entry == "" {
-			t.Errorf("%s: no entrypoint file among its artifacts", name)
+			t.Errorf("%s: no source files among its artifacts", name)
 			continue
 		}
 		for _, want := range []string{"svc", "platform"} {
@@ -267,6 +272,7 @@ func TestDeployableRuntimesSetServiceDefaults(t *testing.T) {
 			t.Fatalf("Get(%q) = %v", name, err)
 		}
 		a := r.Artifacts(Params{
+			Spec: true,
 			Name: "svc", Team: "platform",
 			Module: "example.com/svc", Port: 3000,
 		})
@@ -274,10 +280,13 @@ func TestDeployableRuntimesSetServiceDefaults(t *testing.T) {
 			continue
 		}
 
+		// Across every source file the runtime ships: the property is
+		// that the SERVICE does these things, not that one named file
+		// does.
 		var entry string
 		for _, f := range a.Files {
-			if f.Path == "main.go" || f.Path == "server.js" {
-				entry = f.Body
+			if strings.HasSuffix(f.Path, ".go") || strings.HasSuffix(f.Path, ".js") {
+				entry += f.Body
 			}
 		}
 
@@ -313,7 +322,7 @@ func TestGoServiceSetsServerTimeouts(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	var main string
-	for _, f := range r.Artifacts(Params{Name: "svc", Module: "example.com/svc", Port: 3000}).Files {
+	for _, f := range r.Artifacts(Params{Name: "svc", Module: "example.com/svc", Port: 3000, Spec: true}).Files {
 		if f.Path == "main.go" {
 			main = f.Body
 		}
@@ -342,7 +351,7 @@ func TestTemplatesPinSupportedVersions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get(%q) = %v", name, err)
 		}
-		a := r.Artifacts(Params{Name: "svc", Team: "t", Module: "example.com/svc", Port: 3000})
+		a := r.Artifacts(Params{Name: "svc", Team: "t", Module: "example.com/svc", Port: 3000, Spec: true})
 
 		// Everything the runtime emits, so a version can be asserted
 		// wherever it lives - go.mod, Dockerfile or CI.
@@ -370,7 +379,7 @@ func TestGoRuntimesAgreeOnToolchain(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get(%q) = %v", name, err)
 		}
-		for _, f := range r.Artifacts(Params{Name: "svc", Module: "example.com/svc", Port: 3000}).Files {
+		for _, f := range r.Artifacts(Params{Name: "svc", Module: "example.com/svc", Port: 3000, Spec: true}).Files {
 			if f.Path != "go.mod" {
 				continue
 			}
@@ -405,6 +414,7 @@ func TestRuntimesShipATestFile(t *testing.T) {
 
 		var found string
 		for _, f := range r.Artifacts(Params{
+			Spec: true,
 			Name: "svc", Team: "t", Module: "example.com/svc", Port: 3000,
 		}).Files {
 			for _, suffix := range suffixes {
@@ -427,7 +437,7 @@ func TestGoServiceIsSpecFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	a := r.Artifacts(Params{Name: "svc", Team: "t", Module: "example.com/svc", Port: 3000})
+	a := r.Artifacts(Params{Name: "svc", Team: "t", Module: "example.com/svc", Port: 3000, Spec: true})
 
 	files := map[string]string{}
 	for _, f := range a.Files {
@@ -448,7 +458,7 @@ func TestGoServiceIsSpecFirst(t *testing.T) {
 
 	// init runs Generate before Lock, and must: api/ does not exist until
 	// ogen has run, so resolving imports would fail.
-	if len(r.Generate()) == 0 {
+	if len(r.Generate(true)) == 0 {
 		t.Error("go-service generates nothing, so the spec derives no code")
 	}
 	if len(r.Lock()) == 0 {
@@ -458,7 +468,7 @@ func TestGoServiceIsSpecFirst(t *testing.T) {
 	// regen runs Generate and Lock and CI diffs the result, so neither
 	// may depend on what the world published today. Only Upgrade may.
 	for phase, cmds := range map[string][][]string{
-		"Generate": r.Generate(),
+		"Generate": r.Generate(true),
 		"Lock":     r.Lock(),
 	} {
 		for _, cmd := range cmds {
@@ -486,6 +496,7 @@ func TestGoServiceClientHasResilienceDefaults(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	a := r.Artifacts(Params{
+		Spec: true,
 		Name: "svc", Team: "t", Module: "example.com/svc",
 		Port: 3000, SpecVersion: InitialSpecVersion,
 	})
@@ -543,6 +554,7 @@ func TestGoServiceClientIsImportable(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	a := r.Artifacts(Params{
+		Spec: true,
 		Name: "svc", Team: "t", Module: "example.com/svc",
 		Port: 3000, SpecVersion: InitialSpecVersion,
 	})
@@ -585,6 +597,7 @@ func TestGoServiceShipsATypeScriptClient(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	a := r.Artifacts(Params{
+		Spec: true,
 		Name: "svc", Team: "t", Module: "example.com/svc", Owner: "acme",
 		Port: 3000, SpecVersion: InitialSpecVersion,
 	})
@@ -654,6 +667,7 @@ func TestGoServiceShipsAReadme(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	a := r.Artifacts(Params{
+		Spec: true,
 		Name: "svc", Team: "platform", Module: "example.com/svc", Owner: "acme",
 		Port: 3000, SpecVersion: InitialSpecVersion,
 	})
@@ -703,6 +717,7 @@ func TestGoServiceDisablesUnusedInstrumentation(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	a := r.Artifacts(Params{
+		Spec: true,
 		Name: "svc", Team: "t", Module: "example.com/svc", Owner: "acme",
 		Port: 3000, SpecVersion: InitialSpecVersion,
 	})
