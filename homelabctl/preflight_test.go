@@ -92,3 +92,38 @@ func TestDefaultAccountIsNotDrift(t *testing.T) {
 		t.Errorf("an unset ServiceAccount reported as drift: %+v", f)
 	}
 }
+
+// Secrets reach the pod through envFrom, not `env:`, so a service using
+// `secrets:` must not be told its own secret keys are undeclared drift.
+// The advice that came with that finding - "add them under env:" - would
+// have put the secret in plaintext in config.yaml.
+func TestEnvDriftIgnoresSecretKeys(t *testing.T) {
+	c := &config.Config{
+		Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
+		Image:   config.Image{Repository: "ghcr.io/o/svc"},
+		Env:     map[string]string{"API_URL": "http://x"},
+		Secrets: &config.Secrets{VaultPath: "svc", Keys: []string{"API_KEY"}},
+	}
+	_ = c.Complete()
+
+	live := &liveState{Env: []string{"PORT", "API_URL", "API_KEY"}}
+	if f := checkEnvDrift(c, live); len(f) != 0 {
+		t.Errorf("reported drift for a secret-provided env var: %v", f[0].Message)
+	}
+}
+
+// A genuinely undeclared variable is still drift.
+func TestEnvDriftStillCatchesAnUndeclaredVar(t *testing.T) {
+	c := &config.Config{
+		Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
+		Image:   config.Image{Repository: "ghcr.io/o/svc"},
+		Secrets: &config.Secrets{VaultPath: "svc", Keys: []string{"API_KEY"}},
+	}
+	_ = c.Complete()
+
+	live := &liveState{Env: []string{"PORT", "API_KEY", "FORGOTTEN"}}
+	f := checkEnvDrift(c, live)
+	if len(f) != 1 || !strings.Contains(f[0].Message, "FORGOTTEN") {
+		t.Errorf("did not catch an undeclared env var: %v", f)
+	}
+}

@@ -26,11 +26,15 @@ func mustConfig(t *testing.T, c *config.Config) *config.Config {
 	return c
 }
 
+// Built from Defaults() rather than a bare literal, because that is how
+// Load builds one: hardening and metrics are on by default, and a test
+// that started from the zero value would render an unhardened pod and
+// quietly assert against it.
 func base() *config.Config {
-	return &config.Config{
-		Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
-		Image: config.Image{Repository: "ghcr.io/o/svc"},
-	}
+	c := config.Defaults()
+	c.Name, c.Team, c.Runtime, c.Port = "svc", "t", "go-service", 3000
+	c.Image = config.Image{Repository: "ghcr.io/o/svc"}
+	return &c
 }
 
 // The failure that cost the most: without a kustomization,

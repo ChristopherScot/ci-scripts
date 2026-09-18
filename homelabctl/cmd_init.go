@@ -94,7 +94,7 @@ func runInit(o initOpts) error {
 	arts := r.Artifacts(artifactParams(o, c))
 	isCLI := !arts.Deployable
 
-	if arts.Deployable && c.Hardened() && !r.SupportsHardened() {
+	if arts.Deployable && c.Hardened && !r.SupportsHardened() {
 		return fmt.Errorf("runtime %q cannot run hardened; set `hardened: false` in config.yaml", r.Name())
 	}
 	if err := confirm(o, c, isCLI); err != nil {

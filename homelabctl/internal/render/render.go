@@ -160,7 +160,7 @@ func namespace(c *config.Config) string {
 	// service rejects its own pod at admission, and Argo still reports
 	// Synced while nothing runs.
 	level := "restricted"
-	if !c.Hardened() {
+	if !c.Hardened {
 		level = "baseline"
 	}
 	return fmt.Sprintf(`apiVersion: v1
@@ -242,7 +242,7 @@ spec:
             failureThreshold: 5
 `, c.Probes.Path, c.Port, c.Probes.Path, c.Port)
 
-	if c.Hardened() {
+	if c.Hardened {
 		b.WriteString(`      volumes:
         - name: tmp
           emptyDir: {}
@@ -270,7 +270,7 @@ func serviceAccountName(c *config.Config) string {
 func metricsAnnotations(c *config.Config) string {
 	// No port means nothing to scrape. A cronjob has no Service and no
 	// port, and annotating one anyway pointed Alloy at port 0 forever.
-	if !c.Metrics() || c.Port == 0 {
+	if !c.Metrics || c.Port == 0 {
 		return ""
 	}
 	return fmt.Sprintf(`      annotations:
@@ -323,7 +323,7 @@ func containerBody(c *config.Config, pad string) string {
 `, pad, pad, pad, c.Resources.CPURequest, pad, c.Resources.MemoryRequest,
 		pad, pad, c.Resources.MemoryLimit)
 
-	if c.Hardened() {
+	if c.Hardened {
 		fmt.Fprintf(&b, `%svolumeMounts:
 %s  - name: tmp
 %s    mountPath: /tmp
@@ -383,7 +383,7 @@ spec:
 		c.Name, imageRef)
 
 	b.WriteString(containerBody(c, "              "))
-	if c.Hardened() {
+	if c.Hardened {
 		b.WriteString(`          volumes:
             - name: tmp
               emptyDir: {}
