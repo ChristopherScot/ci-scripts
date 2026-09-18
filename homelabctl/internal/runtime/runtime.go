@@ -100,6 +100,33 @@ func (p Params) Context() string {
 	return "."
 }
 
+// RepoName is the GitHub repository that holds this service, which is
+// where its releases land - the PARENT repo in a monorepo, not the
+// service.
+//
+// A CLI's self-update asks api.github.com for the latest release of
+// owner/repo. Using the service name there is right for a service with
+// its own repo and wrong for one in a monorepo, where it names a
+// repository that does not exist and self-update 404s against a release
+// that is sitting on the parent.
+//
+// Derived from the module path, which already encodes both layouts:
+// github.com/owner/repo for a dedicated repo, and
+// github.com/owner/repo/services/<name> for a monorepo.
+func (p Params) RepoName() string {
+	const host = "github.com/"
+	m := p.Module
+	if i := strings.Index(m, host); i >= 0 {
+		m = m[i+len(host):]
+	}
+	// owner/repo[/more...] - the second element is the repository.
+	parts := strings.Split(m, "/")
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return p.Name
+}
+
 // ServiceDir is where this service's files live relative to the
 // repository ROOT: its directory in a monorepo, "." otherwise.
 //

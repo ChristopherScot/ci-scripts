@@ -1336,3 +1336,49 @@ func TestGoTUIIsACLIThatDraws(t *testing.T) {
 		t.Error("root command has no RunE, so the bare command cannot start the TUI")
 	}
 }
+
+// Self-update asks GitHub for the latest release of owner/repo, and a
+// release belongs to a REPOSITORY. In a monorepo that is the parent, not
+// the service: pokedex-tui lives in ChristopherScot/pokemon, so asking
+// for ChristopherScot/pokedex-tui 404s against a release that exists.
+//
+// Nothing catches this at build time - the constant is a plausible
+// string either way, and the failure only appears when a user runs
+// `<name> update` against a release that is sitting right there.
+func TestSelfUpdateNamesTheRepoThatHoldsTheReleases(t *testing.T) {
+	for _, tc := range []struct {
+		name, module, want string
+	}{
+		{"dedicated repo", "github.com/owner/svc", "svc"},
+		{"monorepo", "github.com/owner/mono/services/svc", "mono"},
+		{"module with no host", "svc", "svc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := testParams()
+			p.Module = tc.module
+			if got := p.RepoName(); got != tc.want {
+				t.Errorf("RepoName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// And it reaches the generated file, for both runtimes that ship one.
+	for _, rt := range []string{"go-cli", "go-tui"} {
+		r, err := Get(rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := testParams()
+		p.Module = "github.com/owner/mono/services/svc"
+		p.PathFilter = "services/svc"
+
+		for _, f := range r.Artifacts(p).Files {
+			if f.Path != "update.go" {
+				continue
+			}
+			if !strings.Contains(f.Body, `repoName = "mono"`) {
+				t.Errorf("%s: update.go does not name the parent repo", rt)
+			}
+		}
+	}
+}
