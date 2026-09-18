@@ -75,8 +75,6 @@ func All(c *config.Config, imageRef string) ([]Output, error) {
 		out = append(out, Output{Path: path, Body: body})
 	}
 
-	add("namespace.yaml", namespace(c))
-
 	// Language and shape are independent: the runtime decided how this is
 	// built, the kind decides what it becomes. A cron job has no Service,
 	// no probes and no rollout strategy - a pod that exits on purpose has
@@ -153,26 +151,30 @@ func kustomization(c *config.Config, out []Output) string {
 	return b.String()
 }
 
-func namespace(c *config.Config) string {
-	// Pod Security Admission enforces at the namespace what the container
-	// securityContext only requests. The level must match what the pod
-	// actually asks for: enforcing `restricted` on a hardened:false
-	// service rejects its own pod at admission, and Argo still reports
-	// Synced while nothing runs.
-	level := "restricted"
-	if !c.Hardened {
-		level = "baseline"
-	}
-	return fmt.Sprintf(`apiVersion: v1
-kind: Namespace
-metadata:
-  name: %s
-  labels:
-    pod-security.kubernetes.io/enforce: %s
-    pod-security.kubernetes.io/enforce-version: latest
-`, c.Namespace, level)
-}
-
+// No namespace.yaml is rendered, deliberately.
+//
+// A Namespace is shared infrastructure, and this tool works at the level
+// of one app. Pod Security Admission is enforced by a label on the
+// NAMESPACE, so rendering one meant a service imposing its own security
+// level on every neighbour: adding the redirector to `shlink` would have
+// labelled that namespace `restricted`, which shlink itself and
+// shlink-web cannot meet. They would have kept running - PSA gates
+// admission, not running pods - and then failed to start again after any
+// rollout or node drain, as an outage nobody would connect to a change
+// in a different service.
+//
+// What this tool CAN do is make its own pod acceptable anywhere,
+// including in a namespace someone else has locked down. The generated
+// securityContext meets `restricted` on its own: runAsNonRoot,
+// allowPrivilegeEscalation false, all capabilities dropped,
+// seccompProfile RuntimeDefault, and never privileged. Verified by
+// dry-running the generated pod into a restricted namespace.
+//
+// Creating the namespace stays with whoever owns it. The Argo
+// Application sets CreateNamespace=true, so a new one still appears
+// without anyone applying YAML by hand; it simply arrives unlabelled,
+// and its security level is set by the person who owns the namespace
+// rather than by whichever app happened to be generated last.
 func deployment(c *config.Config, imageRef string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `apiVersion: apps/v1

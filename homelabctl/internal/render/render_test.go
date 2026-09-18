@@ -289,3 +289,49 @@ func TestSingleCertifiableHostRendersOneIngress(t *testing.T) {
 		}
 	}
 }
+
+// A Namespace is shared infrastructure and this tool works at the level
+// of one app, so it must not render one: Pod Security Admission is a
+// namespace LABEL, and rendering it meant a service imposing its own
+// security level on every neighbour. Adding the redirector to `shlink`
+// would have labelled that namespace restricted, which shlink itself
+// cannot meet - and its pods would have kept running until the next
+// rollout, then failed to start.
+func TestNoNamespaceIsRendered(t *testing.T) {
+	for _, o := range mustAll(t, mustConfig(t, base()), "ghcr.io/o/svc:latest") {
+		if strings.Contains(o.Path, "namespace") {
+			t.Errorf("rendered %s; a namespace belongs to whoever owns it", o.Path)
+		}
+		if strings.Contains(o.Body, "pod-security.kubernetes.io") {
+			t.Errorf("%s sets a namespace-wide security level:\n%s", o.Path, o.Body)
+		}
+	}
+}
+
+// The other half of that bargain: if this tool will not lock down a
+// namespace, its pod has to be acceptable in one that someone else has.
+// These are exactly the five things PSA `restricted` requires.
+func TestPodMeetsRestrictedWithoutTheNamespaceLabel(t *testing.T) {
+	var dep string
+	for _, o := range mustAll(t, mustConfig(t, base()), "ghcr.io/o/svc:latest") {
+		if strings.HasSuffix(o.Path, "deployment.yaml") {
+			dep = o.Body
+		}
+	}
+	if dep == "" {
+		t.Fatal("no deployment rendered")
+	}
+	for _, required := range []string{
+		"runAsNonRoot: true",
+		"allowPrivilegeEscalation: false",
+		"drop: [ALL]",
+		"type: RuntimeDefault",
+	} {
+		if !strings.Contains(dep, required) {
+			t.Errorf("missing %q; the pod would be rejected by a restricted namespace:\n%s", required, dep)
+		}
+	}
+	if strings.Contains(dep, "privileged: true") {
+		t.Error("the pod asks to be privileged, which no restricted namespace admits")
+	}
+}
