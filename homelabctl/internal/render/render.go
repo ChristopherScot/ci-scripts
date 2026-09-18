@@ -1,6 +1,57 @@
 // Package render turns a config into Kubernetes manifests and the Argo
 // Application. Nothing here is language-specific: a Go service and a Node
 // service produce identical manifests given identical config.
+//
+// # If a second deployment target is ever added
+//
+// This package IS the Kubernetes target. The intended shape for a second
+// one - Terraform for an AWS deploy, say - is a sibling package with the
+// same signature, config -> []Output, chosen by a `deploymentTarget:`
+// field in config.yaml. Output{Path, Body} is already target-neutral: a
+// .tf file is text with a path.
+//
+// No interface until that second target is real code. Go's implicit
+// satisfaction means one can be lifted out of these function signatures
+// later with no edits here, so declaring one now would buy nothing and
+// fix the wrong methods - internal/runtime is the cautionary example,
+// where a Runtime interface written for "the runtime that eventually
+// needs more than data" still has exactly one implementation.
+//
+// What the config would need, from an audit of the current schema:
+//
+//   - Portable as-is: name, team, runtime, kind, image, port, env,
+//     secrets (the NAME: property shape maps onto Secrets Manager's
+//     JSON-key selector almost exactly), probes.path.
+//   - Kubernetes-only: namespace, hardened, metrics, ingress.authelia,
+//     and above all patches/overrides - keyed by Kubernetes resource
+//     Kind and generated filename, so they have no AWS meaning at all.
+//     These belong under a `kubernetes:` block if the config ever
+//     grows per-target sections.
+//   - Does not survive translation: resources. Fargate sells discrete
+//     (cpu, memory) pairs - 256 CPU units allows only 512/1024/2048 MiB
+//   - so a 10m CPU request has no expression there at all; the floor
+//     is 0.25 vCPU. replicas is clean for ECS desiredCount and
+//     meaningless for Lambda, whose nearest concept is a concurrency
+//     ceiling rather than a target. schedule is a trap: Kubernetes uses
+//     5-field cron, EventBridge 6-field with a mandatory year, so
+//     "0 3 * * *" is not valid there.
+//
+// The discipline that keeps this from becoming a lowest-common-
+// denominator schema: the shared core shrinks when a target is added,
+// never grows, and a target is allowed to REFUSE a config rather than
+// invent a mapping - `hardened: true` means runAsNonRoot, drop ALL and
+// a seccomp profile, and Fargate offers almost none of that, so a
+// silent partial mapping would be a security lie. Refusing is the same
+// instinct as ShadowedPatches and UnknownOverrides here.
+//
+// Per-target validation needs no new machinery: config.Schema is JSON
+// Schema, and if/then/allOf on a `deploymentTarget:` discriminator lets
+// one document require the aws block for aws targets, forbid it for
+// kubernetes, and constrain cpu to Fargate's legal values. Verified
+// against santhosh-tekuri/jsonschema v6, the compiler Load already
+// uses, and Load validates the raw document BEFORE decoding - which is
+// what makes conditional validation possible, since defaulting erases
+// the difference between an omitted key and a rejected one.
 package render
 
 import (
