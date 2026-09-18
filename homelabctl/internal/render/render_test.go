@@ -12,7 +12,7 @@ import (
 // about error handling read as one line.
 func mustAll(t *testing.T, c *config.Config) []Output {
 	t.Helper()
-	outs, err := All(c)
+	outs, err := All(c, Source{})
 	if err != nil {
 		t.Fatalf("All() = %v", err)
 	}
@@ -395,7 +395,7 @@ func TestOverrideShadowingAPatchIsAnError(t *testing.T) {
 	c.Overrides = map[string]string{
 		"deployment.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: svc\n",
 	}
-	_, err := All(mustConfig(t, c))
+	_, err := All(mustConfig(t, c), Source{})
 	if err == nil {
 		t.Fatal("an override swallowed a patch and render reported success")
 	}
@@ -435,7 +435,7 @@ func TestOverrideAndPatchOnDifferentFilesBothApply(t *testing.T) {
 func TestOverrideNamingNoGeneratedFileIsAnError(t *testing.T) {
 	c := base()
 	c.Overrides = map[string]string{"deploymnet.yaml": "kind: Deployment\n"}
-	_, err := All(mustConfig(t, c))
+	_, err := All(mustConfig(t, c), Source{})
 	if err == nil {
 		t.Fatal("a misspelt override path was accepted")
 	}
@@ -542,4 +542,57 @@ func TestIngressWithoutAPathIsAPlainPrefix(t *testing.T) {
 	if strings.Contains(body, "rewrite-target") {
 		t.Errorf("a service with no ingress.path should not rewrite:\n%s", body)
 	}
+}
+
+// argocd.json tells the ApplicationSet where to fetch a service's
+// manifests. Argo needs the directory holding kustomization.yaml, which
+// is deploy/<name>/ - pointing it at deploy/ finds no kustomization and
+// syncs the app as a plain directory, which silently skips image
+// automation.
+func TestAppEntryPointsAtTheManifestDirectory(t *testing.T) {
+	c := base()
+	src := Source{RepoURL: "https://github.com/o/mono", Path: "services/svc/deploy"}
+
+	var body string
+	for _, o := range mustAllSrc(t, mustConfig(t, c), src) {
+		if o.Path == AppEntryFile {
+			body = o.Body
+		}
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("%s is not valid JSON: %v", AppEntryFile, err)
+	}
+	if got["repoURL"] != src.RepoURL {
+		t.Errorf("repoURL = %q, want %q", got["repoURL"], src.RepoURL)
+	}
+	if want := "services/svc/deploy/svc"; got["path"] != want {
+		t.Errorf("path = %q, want %q", got["path"], want)
+	}
+}
+
+// A service that is not in a repo yet renders no source rather than a
+// wrong one: the generator skips an entry with no repoURL, where a bare
+// path would point Argo at some other repository's root.
+func TestAppEntryOmitsAnUnknownSource(t *testing.T) {
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, base())) {
+		if o.Path == AppEntryFile {
+			body = o.Body
+		}
+	}
+	for _, unwanted := range []string{"repoURL", "path"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("%s carries %q with no source:\n%s", AppEntryFile, unwanted, body)
+		}
+	}
+}
+
+func mustAllSrc(t *testing.T, c *config.Config, src Source) []Output {
+	t.Helper()
+	outs, err := All(c, src)
+	if err != nil {
+		t.Fatalf("All() = %v", err)
+	}
+	return outs
 }

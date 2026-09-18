@@ -123,7 +123,7 @@ func imageRef(c *config.Config) string {
 	return c.Image.Repository + ":latest"
 }
 
-func All(c *config.Config) ([]Output, error) {
+func All(c *config.Config, src Source) ([]Output, error) {
 	imageRef := imageRef(c)
 	var out []Output
 	var err error
@@ -176,7 +176,7 @@ func All(c *config.Config) ([]Output, error) {
 	// add() would offer it to patches keyed by resource kind, let an
 	// override replace it, and list it in kustomization.yaml's resources,
 	// where Argo would try to apply a JSON file as a manifest.
-	entry, err := AppEntry(c)
+	entry, err := AppEntry(c, src)
 	if err != nil {
 		return nil, err
 	}
@@ -736,6 +736,27 @@ metadata:
 	return b.String()
 }
 
+// Source is where a service's manifests live, as Argo has to fetch them.
+//
+// Not derived here: render is a pure function of config, and this is a
+// fact about the working tree - which repo it was cloned from and where
+// in it this service sits. The caller reads that from git and passes it
+// in, so render stays testable without a repository.
+type Source struct {
+	RepoURL string // https://github.com/<owner>/<repo>
+	Path    string // deploy directory, relative to the repo root
+}
+
+// appPath joins the deploy directory to the service's own subdirectory,
+// leaving an empty source empty rather than producing a bare name that
+// would point Argo at the wrong repository root.
+func appPath(deployDir, name string) string {
+	if deployDir == "" {
+		return ""
+	}
+	return deployDir + "/" + name
+}
+
 // AppEntryFile is where a service publishes its generator input. The
 // ApplicationSet's files generator globs for this name, so it is part of
 // that resource's contract rather than an arbitrary choice here.
@@ -753,6 +774,18 @@ type AppParams struct {
 	Team      string `json:"team"`
 	Namespace string `json:"namespace"`
 	Image     string `json:"image"` // repository, no tag: the template appends :latest
+
+	// Where Argo reads this service's manifests: its OWN repository, at
+	// the deploy directory homelabctl renders into. Copying them into
+	// the GitOps repo was the last manual step in the chain, and the one
+	// people forget - a render that reports success while the cluster
+	// keeps running the old manifests.
+	//
+	// Empty when the service is not in a git repo with an origin, which
+	// is a scaffold that has not been pushed yet. The generator skips an
+	// entry it cannot locate rather than pointing Argo at nothing.
+	RepoURL string `json:"repoURL,omitempty"`
+	Path    string `json:"path,omitempty"`
 }
 
 // AppEntry is the generator input for one service, as deploy/argocd.json.
@@ -765,12 +798,17 @@ type AppParams struct {
 //
 // Marshalled rather than formatted: a name or team containing a quote
 // would otherwise produce a file that parses as something else.
-func AppEntry(c *config.Config) (string, error) {
+func AppEntry(c *config.Config, src Source) (string, error) {
 	b, err := json.MarshalIndent(AppParams{
 		Name:      c.Name,
 		Team:      c.Team,
 		Namespace: c.Namespace,
 		Image:     c.Image.Repository,
+		RepoURL:   src.RepoURL,
+		// The service's own directory under deploy/, which is where
+		// kustomization.yaml lands - Argo needs the directory holding
+		// it, not the one above.
+		Path: appPath(src.Path, c.Name),
 	}, "", "  ")
 	if err != nil {
 		return "", err

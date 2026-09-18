@@ -60,7 +60,7 @@ func runDiff(cfgPath, against string) error {
 		return fmt.Errorf("%s does not exist; this service is not in %s yet", dir, against)
 	}
 
-	outs, err := render.All(c)
+	outs, err := render.All(c, gitSource(cfgPath))
 	if err != nil {
 		return err
 	}

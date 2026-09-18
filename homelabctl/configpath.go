@@ -3,7 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
+	"strings"
+
+	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/render"
 )
 
 // configName is the file every command works from.
@@ -74,5 +79,45 @@ func repoRoot() string {
 			return ""
 		}
 		dir = parent
+	}
+}
+
+// gitSource reports where a service's manifests live, as Argo must fetch
+// them: the repository its working tree came from, and the deploy
+// directory within it.
+//
+// Read from git rather than derived from config, because it is a fact
+// about the checkout rather than about the service. go.mod would answer
+// it for a Go service and not for a Node one; the origin remote answers
+// it for both.
+//
+// Everything is zero when the service is not in a repo with an origin -
+// a scaffold that has not been pushed. The ApplicationSet skips an entry
+// with no repoURL rather than pointing Argo at nothing.
+func gitSource(cfgPath string) render.Source {
+	dir := filepath.Dir(cfgPath)
+
+	out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return render.Source{}
+	}
+	url := strings.TrimSpace(string(out))
+	// Normalise to the https form Argo stores, so an Application created
+	// from an ssh remote does not look different from an https one and
+	// register as drift.
+	url = strings.TrimSuffix(url, ".git")
+	if rest, ok := strings.CutPrefix(url, "git@github.com:"); ok {
+		url = "https://github.com/" + rest
+	}
+
+	// The service's own directory inside the repo, plus the deploy
+	// directory render writes into.
+	prefix, err := exec.Command("git", "-C", dir, "rev-parse", "--show-prefix").Output()
+	if err != nil {
+		return render.Source{}
+	}
+	return render.Source{
+		RepoURL: url,
+		Path:    path.Join(strings.TrimSpace(string(prefix)), "deploy"),
 	}
 }

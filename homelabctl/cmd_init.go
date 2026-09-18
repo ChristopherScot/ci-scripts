@@ -607,7 +607,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	var manifests []render.Output
 	if a.Deployable {
 		var err error
-		if manifests, err = render.All(c); err != nil {
+		if manifests, err = render.All(c, render.Source{}); err != nil {
 			return err
 		}
 	}

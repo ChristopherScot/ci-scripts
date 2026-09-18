@@ -15,7 +15,7 @@ func TestPatchKeepsGeneratedConventions(t *testing.T) {
 	c.Patches = map[string]string{
 		"Deployment": "spec:\n  replicas: 3\n",
 	}
-	outs, err := All(mustConfig(t, c))
+	outs, err := All(mustConfig(t, c), Source{})
 	if err != nil {
 		t.Fatalf("All() = %v", err)
 	}
@@ -48,7 +48,7 @@ func TestPatchMergesNestedMapsRatherThanReplacing(t *testing.T) {
 	c.Patches = map[string]string{
 		"Deployment": "spec:\n  template:\n    metadata:\n      annotations:\n        example.com/owner: platform\n",
 	}
-	outs, err := All(mustConfig(t, c))
+	outs, err := All(mustConfig(t, c), Source{})
 	if err != nil {
 		t.Fatalf("All() = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestPatchMergesNestedMapsRatherThanReplacing(t *testing.T) {
 func TestUnknownPatchKindIsRejected(t *testing.T) {
 	c := base()
 	c.Patches = map[string]string{"Deploymnet": "spec:\n  replicas: 3\n"}
-	_, err := All(mustConfig(t, c))
+	_, err := All(mustConfig(t, c), Source{})
 	if err == nil || !strings.Contains(err.Error(), "Deploymnet") {
 		t.Fatalf("All() = %v, want an error naming the unknown kind", err)
 	}
@@ -83,7 +83,7 @@ func TestUnknownPatchKindIsRejected(t *testing.T) {
 func TestMalformedPatchIsReported(t *testing.T) {
 	c := base()
 	c.Patches = map[string]string{"Deployment": "spec:\n  this: is: not: yaml\n"}
-	if _, err := All(mustConfig(t, c)); err == nil {
+	if _, err := All(mustConfig(t, c), Source{}); err == nil {
 		t.Fatal("All() accepted a malformed patch")
 	}
 }
@@ -94,7 +94,7 @@ func TestPatchAppliesToCronJobKind(t *testing.T) {
 	c.Kind = config.KindCronJob
 	c.Schedule = "0 3 * * *"
 	c.Patches = map[string]string{"CronJob": "spec:\n  suspend: true\n"}
-	outs, err := All(mustConfig(t, c))
+	outs, err := All(mustConfig(t, c), Source{})
 	if err != nil {
 		t.Fatalf("All() = %v", err)
 	}
@@ -185,7 +185,7 @@ func TestWorkloadShapesShareContainerSpec(t *testing.T) {
 
 func findOutput(t *testing.T, c *config.Config, name string) string {
 	t.Helper()
-	outs, err := All(c)
+	outs, err := All(c, Source{})
 	if err != nil {
 		t.Fatalf("All() = %v", err)
 	}
@@ -239,7 +239,7 @@ func TestAllRefusesRatherThanEmittingUnpatchedManifests(t *testing.T) {
 	c := base()
 	c.Patches = map[string]string{"Deployment": "spec:\n  replicas: [unclosed"}
 
-	outs, err := All(mustConfig(t, c))
+	outs, err := All(mustConfig(t, c), Source{})
 	if err == nil {
 		t.Fatal("All() accepted a malformed patch")
 	}

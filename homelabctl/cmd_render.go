@@ -95,7 +95,7 @@ func runRender(o renderOpts) error {
 
 	// An override naming a file that is never generated is a typo, and
 	// silently dropping it leaves the author believing it applied.
-	outs, err := render.All(c)
+	outs, err := render.All(c, gitSource(o.cfgPath))
 	if err != nil {
 		return err
 	}
