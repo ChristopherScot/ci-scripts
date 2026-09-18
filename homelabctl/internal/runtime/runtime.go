@@ -129,6 +129,12 @@ type Runtime interface {
 	// go-service, node-service, go-cli.
 	Name() string
 
+	// SpecFiles are the paths that exist only because there is a spec -
+	// the generated clients and their manifests. regen rewrites exactly
+	// these, so a fix to a client template reaches services that already
+	// exist rather than only new ones.
+	SpecFiles() []string
+
 	// Artifacts are everything a new repo of this runtime starts with.
 	// A containerised runtime must produce an image that runs as uid 65532
 	// or set SupportsHardened false - otherwise the pod cannot exec its

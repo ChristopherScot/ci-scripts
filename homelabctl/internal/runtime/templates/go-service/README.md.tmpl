@@ -56,13 +56,26 @@ homelabctl diff                  # what would change in the GitOps repo
 ```
 
 Bump `info.version` in `openapi.yml` when the API changes, then
-`homelabctl regen` — it syncs the version the clients report. CI tags the
-repo on a version change, and that tag is how both clients are released:
+`homelabctl regen` — it syncs the version the clients report. CI releases
+both clients on a version change: it tags the repo, which IS the Go
+client's version, and publishes the TypeScript client to npm.
 
 ```sh
 go get github.com/{{ .Owner }}/{{ .Name }}@v0.2.0
-npm install git+https://github.com/{{ .Owner }}/{{ .Name }}#v0.2.0
+npm install @{{ .Owner }}/{{ .Name }}-client@0.2.0
 ```
+
+Go needs no registry — a tag on this repo is a module version. npm has no
+equivalent: `npm install github:owner/repo` reads `package.json` from the
+repository root, which is not where a service in a monorepo lives, so the
+client is published instead.
+
+Publishing uses npm trusted publishing (OIDC), so there is no token in
+this repo's secrets. It needs a one-time setup on npmjs.com — Packages →
+`@{{ .Owner }}/{{ .Name }}-client` → Settings → Trusted publishing —
+naming this repository and its workflow file. Until that exists the
+publish step fails, which is deliberate: a Go tag whose TypeScript
+counterpart silently never shipped is worse than a red build.
 
 ## Calling this service
 

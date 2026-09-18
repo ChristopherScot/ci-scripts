@@ -35,10 +35,10 @@ func init() {
 			"openapi.yml.tmpl":    {dst: "openapi.yml", specOnly: true},
 			"generate.go.tmpl":    {dst: "generate.go", specOnly: true},
 			"ogen.yml.tmpl":       {dst: "ogen.yml", specOnly: true},
-			"client.go.tmpl":      {dst: "api/client.go", specOnly: true},
-			"client_test.go.tmpl": {dst: "api/client_test.go", specOnly: true},
-			"paging.go.tmpl":      {dst: "api/paging.go", specOnly: true},
-			"paging_test.go.tmpl": {dst: "api/paging_test.go", specOnly: true},
+			"client.go.tmpl":      {dst: "api/client.go", specOnly: true, regen: true},
+			"client_test.go.tmpl": {dst: "api/client_test.go", specOnly: true, regen: true},
+			"paging.go.tmpl":      {dst: "api/paging.go", specOnly: true, regen: true},
+			"paging_test.go.tmpl": {dst: "api/paging_test.go", specOnly: true, regen: true},
 
 			// The TypeScript client. Its package.json sits WITH the code
 			// it describes rather than at the service root: it used to be
@@ -48,9 +48,9 @@ func init() {
 			// a monorepo puts the service at services/<name>/. The client
 			// is published to npmjs instead, so nothing installs from git
 			// and the manifest can live where it belongs.
-			"clients_ts_package.json.tmpl": {dst: "clients/ts/package.json", specOnly: true},
-			"clients_ts_index.js.tmpl":     {dst: "clients/ts/index.js", specOnly: true},
-			"clients_ts_index.d.ts.tmpl":   {dst: "clients/ts/index.d.ts", specOnly: true},
+			"clients_ts_package.json.tmpl": {dst: "clients/ts/package.json", specOnly: true, regen: true},
+			"clients_ts_index.js.tmpl":     {dst: "clients/ts/index.js", specOnly: true, regen: true},
+			"clients_ts_index.d.ts.tmpl":   {dst: "clients/ts/index.d.ts", specOnly: true, regen: true},
 
 			"gitignore.tmpl": {dst: ".gitignore"},
 			"dockerignore":   {dst: ".dockerignore"},

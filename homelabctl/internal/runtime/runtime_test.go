@@ -1177,3 +1177,39 @@ func TestTypeScriptClientPublishesByOIDC(t *testing.T) {
 		}
 	}
 }
+
+// regen rewrites generated clients and NOTHING the author owns.
+//
+// This is not a style preference. specOnly means "exists only for a
+// spec-first service", which covers openapi.yml and ogen.yml - the spec
+// is the author's source of truth, and rewriting it from the template
+// replaced a five-endpoint API with the two-endpoint scaffold. The
+// files regen may touch are the generated ones, which carry a "do not
+// edit" header precisely because they are overwritten.
+func TestRegenRewritesOnlyGeneratedFiles(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := r.SpecFiles()
+	set := map[string]bool{}
+	for _, f := range files {
+		set[f] = true
+	}
+
+	// Authored: destroying any of these loses work that cannot be
+	// recovered from the template.
+	for _, authored := range []string{"openapi.yml", "ogen.yml", "server.go", "config.yaml", "main.go"} {
+		if set[authored] {
+			t.Errorf("regen would overwrite %s, which the author owns", authored)
+		}
+	}
+	// Generated: a fix to one of these templates has to reach services
+	// that already exist, or regen is only useful on the day a service
+	// is created.
+	for _, generated := range []string{"api/client.go", "clients/ts/index.js", "clients/ts/package.json"} {
+		if !set[generated] {
+			t.Errorf("regen does not rewrite %s; a template fix would never reach existing services", generated)
+		}
+	}
+}

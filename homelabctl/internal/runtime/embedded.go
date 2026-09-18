@@ -30,6 +30,19 @@ type tmpl struct {
 	// them. A service with Spec false drops these.
 	specOnly bool
 
+	// regen marks a file `homelabctl regen` rewrites from its template.
+	//
+	// Deliberately separate from specOnly, which means "exists only for
+	// a spec-first service" and covers the spec INPUTS too: openapi.yml
+	// is the author's source of truth and ogen.yml is theirs to tune.
+	// Rewriting those from the template destroys the API - regen did
+	// exactly that once, replacing a five-endpoint spec with the
+	// two-endpoint scaffold.
+	//
+	// Only generated OUTPUT belongs here: the clients, which exist to be
+	// overwritten and carry a "do not edit" header saying so.
+	regen bool
+
 	// plain replaces this template when the service has no spec. The
 	// handler, its tests and the workflow differ rather than disappear.
 	plain string
@@ -77,6 +90,25 @@ func (e embedded) Generate(p Params) [][]string {
 		return nil
 	}
 	return e.generate
+}
+
+// SpecFiles are the paths `homelabctl regen` rewrites from their
+// templates: generated client code, and nothing the author owns.
+//
+// Without this, regen ran the ogen commands and stopped - so a fix to a
+// client TEMPLATE reached new services and never existing ones, and the
+// only way to pick it up was knowing that `init --overwrite` also
+// regenerates. A command named regen should regenerate what it
+// generated.
+func (e embedded) SpecFiles() []string {
+	var out []string
+	for _, t := range e.files {
+		if t.regen && t.dst != "" {
+			out = append(out, t.dst)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (e embedded) Lock() [][]string    { return e.lock }

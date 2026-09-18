@@ -94,6 +94,41 @@ func runRegen(cfgPath string, checkOnly bool) error {
 	if err := run(dir, r.Generate(artifactParams(c, "", "")), r.Lock()); err != nil {
 		return err
 	}
+
+	// Rewrite the files the TEMPLATES own, not just the ones ogen writes.
+	//
+	// regen used to run the generate commands and stop, so a fix to a
+	// client template reached new services and never existing ones - the
+	// only way to pick it up was to know that `init --overwrite` also
+	// regenerates, which is not what the command is called. A latent bad
+	// import in the TypeScript client survived a regen this way.
+	//
+	// Only SpecFiles: everything else the templates write is the
+	// author's to edit, and rewriting server.go or config.yaml here
+	// would discard their work.
+	params := artifactParams(c, "", "")
+	params.Spec = c.Spec
+	rendered := map[string]string{}
+	for _, f := range r.Artifacts(params).Files {
+		rendered[f.Path] = f.Body
+	}
+	for _, path := range r.SpecFiles() {
+		body, ok := rendered[path]
+		if !ok {
+			continue
+		}
+		full := filepath.Join(dir, path)
+		if old, err := os.ReadFile(full); err == nil && string(old) == body {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+		fmt.Println("  updated:", path)
+	}
 	for _, s := range stale {
 		fmt.Println("  updated:", s)
 	}
