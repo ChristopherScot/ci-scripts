@@ -9,9 +9,9 @@ import (
 
 // mustAll renders and fails the test on error, so cases that are not
 // about error handling read as one line.
-func mustAll(t *testing.T, c *config.Config, imageRef string) []Output {
+func mustAll(t *testing.T, c *config.Config) []Output {
 	t.Helper()
-	outs, err := All(c, imageRef)
+	outs, err := All(c)
 	if err != nil {
 		t.Fatalf("All() = %v", err)
 	}
@@ -41,7 +41,7 @@ func base() *config.Config {
 // argocd-image-updater skips the app and it stays on a stale image
 // forever, with only a log line to say so.
 func TestAlwaysRendersKustomizationWithImages(t *testing.T) {
-	out := mustAll(t, mustConfig(t, base()), "ghcr.io/o/svc:latest")
+	out := mustAll(t, mustConfig(t, base()))
 
 	var k string
 	for _, o := range out {
@@ -65,7 +65,7 @@ func TestKustomizationListsEveryResource(t *testing.T) {
 	c := base()
 	c.Ingress = &config.Ingress{Hosts: config.IngressHosts("svc.example.com")}
 	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: config.EnvKeys("TOKEN")}
-	out := mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest")
+	out := mustAll(t, mustConfig(t, c))
 
 	var k string
 	for _, o := range out {
@@ -110,12 +110,15 @@ func TestOverrideSubstitutesOnlyImagePlaceholder(t *testing.T) {
 	c.Overrides = map[string]string{
 		"deployment.yaml": "image: " + ImagePlaceholder + "\nbody: {{ .username | b64enc }}\n",
 	}
-	for _, o := range mustAll(t, mustConfig(t, c), "ghcr.io/o/svc@sha256:abc") {
+	for _, o := range mustAll(t, mustConfig(t, c)) {
 		if o.Path != "deployment.yaml" {
 			continue
 		}
-		if !strings.Contains(o.Body, "ghcr.io/o/svc@sha256:abc") {
-			t.Error("ImageURL placeholder was not substituted in the override")
+		// :latest, because that is what a rendered manifest always
+		// names - image-updater resolves it to a digest and writes that
+		// into kustomization.yaml.
+		if !strings.Contains(o.Body, "ghcr.io/o/svc:latest") {
+			t.Errorf("ImageURL placeholder was not substituted in the override:\n%s", o.Body)
 		}
 		if !strings.Contains(o.Body, "{{ .username | b64enc }}") {
 			t.Error("override's other templating was mangled")
@@ -124,7 +127,7 @@ func TestOverrideSubstitutesOnlyImagePlaceholder(t *testing.T) {
 }
 
 func TestHardenedByDefault(t *testing.T) {
-	for _, o := range mustAll(t, mustConfig(t, base()), "img") {
+	for _, o := range mustAll(t, mustConfig(t, base())) {
 		if o.Path != "deployment.yaml" {
 			continue
 		}
@@ -147,7 +150,7 @@ func TestIngressClassFollowsPublic(t *testing.T) {
 		c := base()
 		c.Ingress = &config.Ingress{Hosts: config.IngressHosts("h.example.com"), Public: tc.public}
 		found := false
-		for _, o := range mustAll(t, mustConfig(t, c), "img") {
+		for _, o := range mustAll(t, mustConfig(t, c)) {
 			if o.Path == "ingress.yaml" && strings.Contains(o.Body, tc.want) {
 				found = true
 			}
@@ -166,7 +169,7 @@ func TestCronJobRendersJobShapeNotDeployment(t *testing.T) {
 	c.Kind = config.KindCronJob
 	c.Schedule = "*/5 * * * *"
 	c.TimeZone = "America/New_York"
-	out := mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest")
+	out := mustAll(t, mustConfig(t, c))
 
 	var paths []string
 	var cron string
@@ -211,7 +214,7 @@ func TestCronJobStillHardenedAndGetsSecrets(t *testing.T) {
 	c.Kind = config.KindCronJob
 	c.Schedule = "0 3 * * *"
 	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: config.EnvKeys("TOKEN")}
-	for _, o := range mustAll(t, mustConfig(t, c), "img") {
+	for _, o := range mustAll(t, mustConfig(t, c)) {
 		if o.Path != "cronjob.yaml" {
 			continue
 		}
@@ -233,7 +236,7 @@ func TestMixedHostsRenderAsTwoIngresses(t *testing.T) {
 	c.Ingress = &config.Ingress{Hosts: config.IngressHosts("svc.example.com", "svc.lab")}
 
 	var ing string
-	for _, o := range mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest") {
+	for _, o := range mustAll(t, mustConfig(t, c)) {
 		if strings.HasSuffix(o.Path, "ingress.yaml") {
 			ing = o.Body
 		}
@@ -278,7 +281,7 @@ func TestSingleCertifiableHostRendersOneIngress(t *testing.T) {
 	c := base()
 	c.Ingress = &config.Ingress{Hosts: config.IngressHosts("svc.example.com")}
 
-	for _, o := range mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest") {
+	for _, o := range mustAll(t, mustConfig(t, c)) {
 		if strings.HasSuffix(o.Path, "ingress.yaml") {
 			if strings.Contains(o.Body, "---") {
 				t.Errorf("a single host rendered two Ingresses:\n%s", o.Body)
@@ -298,7 +301,7 @@ func TestSingleCertifiableHostRendersOneIngress(t *testing.T) {
 // cannot meet - and its pods would have kept running until the next
 // rollout, then failed to start.
 func TestNoNamespaceIsRendered(t *testing.T) {
-	for _, o := range mustAll(t, mustConfig(t, base()), "ghcr.io/o/svc:latest") {
+	for _, o := range mustAll(t, mustConfig(t, base())) {
 		if strings.Contains(o.Path, "namespace") {
 			t.Errorf("rendered %s; a namespace belongs to whoever owns it", o.Path)
 		}
@@ -313,7 +316,7 @@ func TestNoNamespaceIsRendered(t *testing.T) {
 // These are exactly the five things PSA `restricted` requires.
 func TestPodMeetsRestrictedWithoutTheNamespaceLabel(t *testing.T) {
 	var dep string
-	for _, o := range mustAll(t, mustConfig(t, base()), "ghcr.io/o/svc:latest") {
+	for _, o := range mustAll(t, mustConfig(t, base())) {
 		if strings.HasSuffix(o.Path, "deployment.yaml") {
 			dep = o.Body
 		}

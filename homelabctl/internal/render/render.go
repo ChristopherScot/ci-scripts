@@ -58,7 +58,21 @@ func UnknownOverrides(c *config.Config, outs []Output) []string {
 // time. Any caller reaching for the shorter name got manifests with their
 // patches quietly missing, which is the exact failure this package exists
 // to prevent: Argo reports Synced and Healthy, and the config lied.
-func All(c *config.Config, imageRef string) ([]Output, error) {
+// imageRef is what a rendered manifest names. Always the repository at
+// :latest, because argocd-image-updater owns the actual version: it
+// resolves :latest to a digest and writes THAT into kustomization.yaml,
+// which is why every committed deployment.yaml in this cluster says
+// :latest and none carries a digest.
+//
+// Rendering therefore needs no image argument, and not having one is
+// what makes All deterministic - the same config produces the same
+// manifests, so CI can render and diff.
+func imageRef(c *config.Config) string {
+	return c.Image.Repository + ":latest"
+}
+
+func All(c *config.Config) ([]Output, error) {
+	imageRef := imageRef(c)
 	var out []Output
 	var err error
 	add := func(path, body string) {

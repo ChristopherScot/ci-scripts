@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"testing"
 )
 
@@ -67,15 +66,6 @@ func TestIsNewer(t *testing.T) {
 	}
 }
 
-// An abbreviated SHA is not a registry tag and yields ImagePullBackOff, so
-// render must refuse one rather than generate a manifest that cannot pull.
-func TestRenderRejectsAbbreviatedSHA(t *testing.T) {
-	err := runRender(renderOpts{
-		cfgPath:  "nonexistent.yaml",
-		imageRef: "ghcr.io/o/x:abc1234",
-		out:      ".",
-	})
-	if !errors.Is(err, errAbbreviatedSHA) {
-		t.Errorf("runRender with short SHA = %v, want errAbbreviatedSHA", err)
-	}
-}
+// The guard moved to `check`, which reads committed manifests. render
+// no longer takes an image ref at all: argocd-image-updater owns the
+// running version, so a rendered manifest always names :latest.

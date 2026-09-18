@@ -15,7 +15,7 @@ homelabctl init mytool --runtime go-cli
 homelabctl regen                 # after editing openapi.yml
 homelabctl regen --check         # what CI runs; exits 1 if anything is stale
 
-homelabctl render config.yaml ghcr.io/owner/svc@sha256:...  --out .
+homelabctl render                    # after changing config.yaml
 homelabctl check deploy          # deploy misconfigurations and spec problems
 homelabctl diff                  # what would change in the GitOps repo
 homelabctl update

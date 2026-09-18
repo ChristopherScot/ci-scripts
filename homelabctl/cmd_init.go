@@ -439,7 +439,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// Manifests are generated rather than copied, so they reflect
 		// current conventions instead of whatever the template looked like
 		// the day the service was created. `render` regenerates them later.
-		manifests, err := render.All(c, c.Image.Repository+":latest")
+		manifests, err := render.All(c)
 		if err != nil {
 			return err
 		}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,17 +16,12 @@ import (
 // and fail only at pull time, as ImagePullBackOff with the app still
 // showing Synced.
 
-// errAbbreviatedSHA is a sentinel so callers and tests can recognise this
-// without matching on the message text.
-var errAbbreviatedSHA = errors.New("image ref ends in an abbreviated SHA; registry tags are full 40-char SHAs or digests")
-
 // renderOpts is what `render` was asked to do. A struct rather than eight
 // positional parameters, matching initOpts: four consecutive strings at a
 // call site are indistinguishable from each other, and the compiler
 // cannot catch a transposition.
 type renderOpts struct {
-	cfgPath  string
-	imageRef string
+	cfgPath string
 
 	out     string // directory to write manifests into
 	appOut  string // where to also write the Argo Application, if anywhere
@@ -41,16 +35,19 @@ type renderOpts struct {
 func renderCmd() *cobra.Command {
 	var o renderOpts
 	cmd := &cobra.Command{
-		Use:   "render [config.yaml] <image-ref>",
+		Use:   "render [config.yaml]",
 		Short: "render manifests from a config",
-		Long: "Render manifests. Used by CI and to regenerate after a convention\n" +
-			"change. image-ref must be a full SHA or digest - an abbreviated SHA\n" +
-			"is not a registry tag and yields ImagePullBackOff.",
-		Args: cobra.RangeArgs(1, 2),
+		Long: "Render every manifest from config.yaml. Run it after changing the\n" +
+			"config; the manifests are derived from it and nothing else.\n\n" +
+			"It takes no image reference. argocd-image-updater owns the running\n" +
+			"version: it resolves :latest to a digest and writes that into\n" +
+			"kustomization.yaml, so a rendered manifest always names :latest.\n" +
+			"Rendering is therefore deterministic and CI can diff its output.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			o.cfgPath, o.imageRef = defaultConfigPath, args[0]
-			if len(args) == 2 {
-				o.cfgPath, o.imageRef = args[0], args[1]
+			o.cfgPath = defaultConfigPath
+			if len(args) == 1 {
+				o.cfgPath = args[0]
 			}
 			return runRender(o)
 		},
@@ -65,10 +62,6 @@ func renderCmd() *cobra.Command {
 }
 
 func runRender(o renderOpts) error {
-	if config.IsAbbreviatedSHA(o.imageRef) {
-		return fmt.Errorf("%q: %w", o.imageRef, errAbbreviatedSHA)
-	}
-
 	c, err := config.Load(o.cfgPath)
 	if err != nil {
 		return err
@@ -103,7 +96,7 @@ func runRender(o renderOpts) error {
 
 	// An override naming a file that is never generated is a typo, and
 	// silently dropping it leaves the author believing it applied.
-	outs, err := render.All(c, o.imageRef)
+	outs, err := render.All(c)
 	if err != nil {
 		return err
 	}
