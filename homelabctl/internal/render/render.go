@@ -444,6 +444,24 @@ spec:
 // externalSecret follows the per-app Vault convention: each service reads
 // only its own kv path, via a role bound to its own ServiceAccount and
 // namespace, so compromising one pod does not expose another app's secrets.
+// esoAPIVersion is the External Secrets API these manifests declare.
+//
+// One constant rather than a literal at each use, because every service
+// shares it: when ESO drops a version, every SecretStore and
+// ExternalSecret in the fleet becomes unappliable at the same moment,
+// and the failure is quiet - the ExternalSecret stops refreshing while
+// the Secret it already created lingers, so pods keep running on
+// credentials nobody is renewing.
+//
+// v1beta1 is what this cluster serves (ESO v0.11.0, which does not
+// offer v1 at all). ESO 0.16 added v1 and 0.17 removed v1beta1, so
+// upgrading past 0.16 means changing this line and re-rendering every
+// service. `check` compares it against what the cluster serves, so a
+// mismatch is reported rather than discovered at sync time.
+// ESOAPIVersion is read by `check`, which compares it against the
+// cluster.
+const ESOAPIVersion = "external-secrets.io/v1beta1"
+
 func externalSecret(c *config.Config) string {
 	var b strings.Builder
 	sa, store, secret := c.ServiceAccountName(), c.SecretStoreName(), c.SecretName()
@@ -453,7 +471,7 @@ metadata:
   name: %s
   namespace: %s
 ---
-apiVersion: external-secrets.io/v1beta1
+apiVersion: ESO_API_VERSION
 kind: SecretStore
 metadata:
   name: %s
@@ -471,7 +489,7 @@ spec:
           serviceAccountRef:
             name: %s
 ---
-apiVersion: external-secrets.io/v1beta1
+apiVersion: ESO_API_VERSION
 kind: ExternalSecret
 metadata:
   name: %s
@@ -489,7 +507,7 @@ spec:
 		fmt.Fprintf(&b, "    - secretKey: %s\n      remoteRef: { key: %s, property: %s }\n",
 			k.Env, c.Secrets.VaultPath, k.Property)
 	}
-	return b.String()
+	return strings.ReplaceAll(b.String(), "ESO_API_VERSION", ESOAPIVersion)
 }
 
 // ingress renders one or two Ingress resources: one for the names that

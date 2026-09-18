@@ -3,11 +3,13 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
+	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/render"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -67,6 +69,42 @@ func manifestDir(dir string) string {
 	return dir
 }
 
+// checkESOVersion compares the External Secrets API these manifests
+// declare against what the cluster actually serves.
+//
+// Every service shares one apiVersion, so an ESO upgrade that drops it
+// breaks all of them at once - and quietly: the ExternalSecret stops
+// refreshing while the Secret it already created lingers, so pods keep
+// running on credentials nobody is renewing. This turns that into a
+// message before the manifests are applied.
+//
+// A cluster that cannot be reached is not a failure. This runs in CI,
+// which has no kubeconfig, and a check that cannot run should not be
+// the reason a build goes red.
+func checkESOVersion(add func(string, ...any)) {
+	// -o name omits the version, which is the thing being compared.
+	// The APIVERSION column carries it.
+	out, err := exec.Command("kubectl", "api-resources",
+		"--api-group=external-secrets.io",
+		"--no-headers", "-o", "wide").Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		return // no cluster, or no ESO in it: nothing to compare against
+	}
+	// Field-wise, not Contains: "external-secrets.io/v1" is a prefix of
+	// "external-secrets.io/v1beta1", so a substring test reports a match
+	// for a version the cluster does not serve.
+	for _, line := range strings.Split(string(out), "\n") {
+		for _, f := range strings.Fields(line) {
+			if f == render.ESOAPIVersion {
+				return
+			}
+		}
+	}
+	add("the cluster does not serve %s, which every rendered ExternalSecret declares.\n"+
+		"    upgrading External Secrets means changing render.ESOAPIVersion and "+
+		"re-rendering every service", render.ESOAPIVersion)
+}
+
 func runCheck(dir string) error {
 
 	var problems []string
@@ -76,6 +114,8 @@ func runCheck(dir string) error {
 		return fmt.Errorf("no %s/ directory", dir)
 	}
 	dir = manifestDir(dir)
+
+	checkESOVersion(add)
 
 	kPath := filepath.Join(dir, "kustomization.yaml")
 	kb, err := os.ReadFile(kPath)

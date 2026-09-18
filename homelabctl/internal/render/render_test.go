@@ -360,3 +360,31 @@ func TestVaultPathReachesRemoteRefVerbatim(t *testing.T) {
 		t.Errorf("vaultPath was not passed through as remoteRef.key:\n%s", body)
 	}
 }
+
+// Every service declares the same External Secrets apiVersion, so when
+// ESO drops one they all break at the same moment - and quietly: the
+// ExternalSecret stops refreshing while the Secret it already made
+// lingers, so pods run on credentials nobody is renewing.
+//
+// One constant is what lets `check` compare it against the cluster.
+func TestExternalSecretUsesTheSharedAPIVersion(t *testing.T) {
+	c := base()
+	c.Secrets = &config.Secrets{VaultPath: "svc", Keys: config.EnvKeys("TOK")}
+
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if strings.HasSuffix(o.Path, "externalsecret.yaml") {
+			body = o.Body
+		}
+	}
+	if body == "" {
+		t.Fatal("no externalsecret rendered")
+	}
+	// Both the SecretStore and the ExternalSecret, not just one.
+	if got := strings.Count(body, "apiVersion: "+ESOAPIVersion); got != 2 {
+		t.Errorf("declared %s %d times, want 2:\n%s", ESOAPIVersion, got, body)
+	}
+	if strings.Contains(body, "ESO_API_VERSION") {
+		t.Error("the placeholder survived into the manifest")
+	}
+}
