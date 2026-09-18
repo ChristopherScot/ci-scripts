@@ -392,3 +392,33 @@ func TestOwnerResolutionOrder(t *testing.T) {
 		t.Fatal("resolveOwner blocked on input in a non-interactive run")
 	}
 }
+
+// The npm token is only asked for when it would be used, and never
+// blocks a non-interactive run.
+func TestNPMTokenIsOnlyAskedForWhenItApplies(t *testing.T) {
+	// --local-only creates no repo, so there is nothing to set a secret
+	// on. A prompt here would be asking for a credential to store nowhere.
+	if err := ensureNPMToken(initOpts{localOnly: true, name: "svc"}, true); err != nil {
+		t.Errorf("--local-only should skip the token: %v", err)
+	}
+	// A specless service generates no TypeScript client, so it has
+	// nothing to publish and its author has no use for a publish token.
+	if err := ensureNPMToken(initOpts{name: "svc", owner: "o"}, false); err != nil {
+		t.Errorf("a specless service should skip the token: %v", err)
+	}
+
+	// Non-interactive with no token set: report it and carry on. The
+	// service is scaffolded and correct; it just cannot publish yet, and
+	// failing init over that would be worse than saying so.
+	t.Setenv(npmTokenEnv, "")
+	done := make(chan error, 1)
+	go func() { done <- ensureNPMToken(initOpts{name: "svc", owner: "o", yes: true}, true) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("a missing token should not fail a --yes run: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("ensureNPMToken blocked on input in a non-interactive run")
+	}
+}

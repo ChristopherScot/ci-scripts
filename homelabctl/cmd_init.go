@@ -22,6 +22,12 @@ import (
 // defaultTeam stamps every log line until config.yaml says otherwise.
 const ownerEnv = "HOMELAB_OWNER"
 
+// npmTokenEnv supplies the token that lets CI publish the generated
+// TypeScript client. Named for npm's own convention rather than
+// HOMELAB_-prefixed, so an existing NPM_TOKEN in the environment is
+// picked up without being set twice.
+const npmTokenEnv = "NPM_TOKEN"
+
 const defaultTeam = "me-myself-and-i"
 
 type initOpts struct {
@@ -151,6 +157,12 @@ func runInit(o initOpts) error {
 		d, err := setupRemote(o)
 		if err != nil {
 			return fmt.Errorf("remote setup: %w", err)
+		}
+		// After the repo exists, since that is what the secret is set on.
+		// A spec-first service publishes a TypeScript client, and CI
+		// cannot do that without a token.
+		if err := ensureNPMToken(o, c.Spec); err != nil {
+			return err
 		}
 		dir = d
 	} else if o.parentRepo != "" {
@@ -371,6 +383,67 @@ func confirm(o initOpts, c *config.Config, isCLI bool) error {
 	if s := strings.TrimSpace(strings.ToLower(line)); s != "y" && s != "yes" {
 		return fmt.Errorf("aborted")
 	}
+	return nil
+}
+
+// ensureNPMToken puts NPM_TOKEN in the repo's secrets, so CI can publish
+// the generated TypeScript client.
+//
+// Only for a spec-first service: that is the only kind that generates a
+// client, and asking a CLI's author for a publishing token would be
+// asking for a credential their service will never use.
+//
+// The token is never passed as an argument. `gh secret set` reads stdin
+// when --body is omitted, so it does not reach a process table or a
+// shell history - which an exported env var already risks enough.
+func ensureNPMToken(o initOpts, spec bool) error {
+	if o.localOnly || !spec {
+		return nil
+	}
+	repo := o.name
+	if o.parentRepo != "" {
+		repo = o.parentRepo
+	}
+	slug := o.owner + "/" + repo
+
+	// Already set is the ordinary case for the second service into a
+	// monorepo, and re-prompting for a secret that exists would be a good
+	// way to get it replaced with a typo.
+	if out, err := exec.Command("gh", "secret", "list", "--repo", slug).Output(); err == nil {
+		if strings.Contains(string(out), npmTokenEnv) {
+			fmt.Printf("%s is already set on %s\n", npmTokenEnv, slug)
+			return nil
+		}
+	}
+
+	token := strings.TrimSpace(os.Getenv(npmTokenEnv))
+	if token == "" {
+		// Non-interactive: say what is missing rather than hang, and do
+		// not fail the whole init - the service is scaffolded and
+		// correct, it just cannot publish its client until this is set.
+		if o.yes || o.dryRun {
+			fmt.Printf("\n  %s is not set, so CI cannot publish the TypeScript client.\n", npmTokenEnv)
+			fmt.Printf("  Set it later with: gh secret set %s --repo %s\n\n", npmTokenEnv, slug)
+			return nil
+		}
+		fmt.Printf("\nnpm token for publishing the TypeScript client.\n")
+		fmt.Printf("Leave blank to skip; set it later with `gh secret set %s --repo %s`.\n", npmTokenEnv, slug)
+		fmt.Printf("%s: ", npmTokenEnv)
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		token = strings.TrimSpace(line)
+		if token == "" {
+			fmt.Printf("skipped; CI will fail at the publish step until it is set\n\n")
+			return nil
+		}
+	}
+
+	cmd := exec.Command("gh", "secret", "set", npmTokenEnv, "--repo", slug)
+	cmd.Stdin = strings.NewReader(token)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("setting %s on %s: %w", npmTokenEnv, slug, err)
+	}
+	fmt.Printf("%s set on %s\n", npmTokenEnv, slug)
 	return nil
 }
 
