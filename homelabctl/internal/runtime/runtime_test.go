@@ -1002,3 +1002,34 @@ func TestEveryDeclaredTemplateResolves(t *testing.T) {
 		}
 	}
 }
+
+// The manifests are derived from config.yaml, so a config change nobody
+// re-rendered leaves them describing the old service - and `check
+// deploy` does not notice, because it validates what is there rather
+// than comparing it to what the config says.
+//
+// CI renders and diffs, the same guard it already runs for generated
+// code. render takes no image ref and preflight degrades to a notice
+// without a cluster, so the output is deterministic there.
+func TestWorkflowsCheckManifestsAgainstConfig(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		spec bool
+	}{{"spec-first", true}, {"specless", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := testParams()
+			p.Spec = tc.spec
+			wf := r.Artifacts(p).Workflow
+			if !strings.Contains(wf, "homelabctl render") {
+				t.Error("CI does not re-render, so a stale manifest ships unnoticed")
+			}
+			if !strings.Contains(wf, "git diff --exit-code -- deploy/") {
+				t.Error("CI renders but does not diff, so the render proves nothing")
+			}
+		})
+	}
+}

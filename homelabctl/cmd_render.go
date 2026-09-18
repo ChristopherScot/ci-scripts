@@ -52,12 +52,13 @@ func renderCmd() *cobra.Command {
 			return runRender(o)
 		},
 	}
-	// Empty, not ".": the default is the service directory, which is
-	// where the config was found. Defaulting to the working directory
-	// meant running from a subdirectory wrote manifests into it -
-	// api/<name>/deployment.yaml - now that the config is found by
-	// walking up rather than required to be underfoot.
-	cmd.Flags().StringVar(&o.out, "out", "", "directory to write manifests into (default: beside config.yaml)")
+	// Empty, not ".": the default is deploy/ beside config.yaml, which
+	// is where init writes and where the files already are. Defaulting
+	// to the working directory wrote them wherever you happened to
+	// stand; defaulting to the config's directory wrote them one level
+	// above the ones it should have replaced, leaving the originals
+	// stale while reporting success.
+	cmd.Flags().StringVar(&o.out, "out", "", "directory to write manifests into (default: deploy/ beside config.yaml)")
 	cmd.Flags().StringVar(&o.appOut, "app-out", "", "also write the Argo Application here")
 	cmd.Flags().StringVar(&o.repoURL, "repo-url", "https://github.com/ChristopherScot/homelab", "repo the Application syncs from")
 	cmd.Flags().StringVar(&o.appPath, "app-path", "", "path within that repo (default: service name)")
@@ -112,7 +113,7 @@ func runRender(o renderOpts) error {
 
 	out := o.out
 	if out == "" {
-		out = filepath.Dir(o.cfgPath)
+		out = filepath.Join(filepath.Dir(o.cfgPath), "deploy")
 	}
 	dir := filepath.Join(out, c.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

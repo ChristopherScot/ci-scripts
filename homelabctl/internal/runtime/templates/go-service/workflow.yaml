@@ -55,6 +55,20 @@ jobs:
       - name: Check deploy manifests
         run: ./homelabctl check deploy
 
+      # The manifests are derived from config.yaml, so a config change
+      # that nobody re-rendered leaves them describing the old service -
+      # and `check deploy` would not notice, because it validates what
+      # is there rather than comparing it to what the config says.
+      #
+      # render takes no image ref and preflight degrades to a notice
+      # without a cluster, so this is deterministic here: the same
+      # config always produces the same files.
+      - name: Check manifests match config.yaml
+        run: |
+          ./homelabctl render
+          git diff --exit-code -- deploy/ \
+            || { echo "::error::manifests are stale - run 'homelabctl render' and commit"; exit 1; }
+
       # buildx, because cache-from/cache-to type=gha below need it: the
       # default docker driver cannot export a cache and fails the build
       # with "Cache export is not supported for the docker driver".
