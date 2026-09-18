@@ -93,25 +93,6 @@ func TestKustomizationListsEveryResource(t *testing.T) {
 	}
 }
 
-func TestApplicationHasFullImageUpdaterAnnotations(t *testing.T) {
-	app := Application(mustConfig(t, base()), "https://github.com/o/homelab", "svc")
-	for _, want := range []string{
-		"image-list:",
-		"update-strategy: digest",
-		"write-back-method: git",
-		// Without this the updater writes a separate .argocd-source file,
-		// leaving two places that both claim to set the image.
-		"write-back-target: kustomization",
-		// Upstream warns that git write-back needs an explicit branch when
-		// targetRevision is HEAD.
-		"git-branch: main",
-	} {
-		if !strings.Contains(app, want) {
-			t.Errorf("Application missing %q", want)
-		}
-	}
-}
-
 // Overrides carry other templating languages - an ExternalSecret body uses
 // ESO's own {{ .username }} and b64enc - so only the image placeholder may
 // be substituted, and the rest must survive untouched.

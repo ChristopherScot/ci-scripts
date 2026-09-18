@@ -709,45 +709,6 @@ func AppEntry(c *config.Config) (string, error) {
 	return string(b) + "\n", nil
 }
 
-// Application renders the Argo Application, including the full
-// image-updater annotation set. Omitting write-back-target makes the
-// updater write a separate .argocd-source file, leaving two places that
-// both claim to set the image; omitting git-branch is warned against
-// upstream when targetRevision is HEAD.
-func Application(c *config.Config, repoURL, path string) string {
-	return fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: %s
-  namespace: argocd
-  labels:
-    team: %s
-  annotations:
-    argocd-image-updater.argoproj.io/image-list: %s=%s:latest
-    argocd-image-updater.argoproj.io/%s.update-strategy: digest
-    argocd-image-updater.argoproj.io/write-back-method: git
-    argocd-image-updater.argoproj.io/write-back-target: kustomization
-    argocd-image-updater.argoproj.io/git-branch: main
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
-spec:
-  project: default
-  source:
-    repoURL: '%s'
-    targetRevision: HEAD
-    path: %s
-  destination:
-    server: 'https://kubernetes.default.svc'
-    namespace: %s
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
-`, c.Name, c.Team, c.Name, c.Image.Repository, c.Name, repoURL, path, c.Namespace)
-}
-
 func sortedKeys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
