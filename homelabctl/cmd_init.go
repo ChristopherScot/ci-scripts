@@ -595,14 +595,6 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		return err
 	}
 
-	if a.Deployable {
-		appPath := filepath.Join(dir, "deploy", "_argocd-application.yaml")
-		appRepo := "https://github.com/" + o.owner + "/homelab"
-		if err := writeFile(appPath, render.Application(c, appRepo, o.name)); err != nil {
-			return err
-		}
-	}
-
 	// Resolve dependencies so the scaffold builds immediately. Without a
 	// go.sum, Go refuses to build at all - it will not fetch on demand -
 	// so a template that declares any dependency is dead on arrival.

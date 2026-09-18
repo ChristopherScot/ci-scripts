@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -74,12 +75,21 @@ func TestKustomizationListsEveryResource(t *testing.T) {
 		}
 	}
 	for _, o := range out {
-		if o.Path == "kustomization.yaml" {
+		// kustomization.yaml would list itself; argocd.json is input for
+		// the ApplicationSet generator rather than a resource. Everything
+		// else is a manifest Argo has to apply, and one missing here is
+		// one that silently never reaches the cluster.
+		if o.Path == "kustomization.yaml" || o.Path == AppEntryFile {
 			continue
 		}
 		if !strings.Contains(k, o.Path) {
 			t.Errorf("kustomization.yaml does not list %s", o.Path)
 		}
+	}
+	// The converse: a non-manifest listed here makes Argo apply a JSON
+	// file as a Kubernetes resource, which fails the entire sync.
+	if strings.Contains(k, AppEntryFile) {
+		t.Errorf("kustomization.yaml lists %s, which Argo would try to apply:\n%s", AppEntryFile, k)
 	}
 }
 
@@ -453,5 +463,45 @@ func TestOverrideNamingNoGeneratedFileIsAnError(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not mention %q: %v", want, err)
 		}
+	}
+}
+
+// The ApplicationSet template reads these keys by name, so a rename here
+// that is not matched in the template renders an empty string into a live
+// Application - a namespace of "" would deploy the service to the wrong
+// place, or fail the sync, with nothing in this repo to catch it.
+func TestAppEntryCarriesTheGeneratorsParameters(t *testing.T) {
+	c := base()
+	c.Team = "me-myself-and-i"
+	c.Namespace = "elsewhere" // deliberately not the service name
+	out := mustAll(t, mustConfig(t, c))
+
+	var body string
+	for _, o := range out {
+		if o.Path == AppEntryFile {
+			body = o.Body
+		}
+	}
+	if body == "" {
+		t.Fatalf("no %s rendered", AppEntryFile)
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("%s is not valid JSON: %v\n%s", AppEntryFile, err, body)
+	}
+	for k, want := range map[string]string{
+		"name":      "svc",
+		"team":      "me-myself-and-i",
+		"namespace": "elsewhere",
+		"image":     "ghcr.io/o/svc",
+	} {
+		if got[k] != want {
+			t.Errorf("%s[%q] = %q, want %q", AppEntryFile, k, got[k], want)
+		}
+	}
+	// The template appends :latest, so a tag here would produce
+	// "repo:latest:latest" and an image that does not exist.
+	if strings.Contains(got["image"], ":") {
+		t.Errorf("image %q carries a tag; the template appends :latest", got["image"])
 	}
 }

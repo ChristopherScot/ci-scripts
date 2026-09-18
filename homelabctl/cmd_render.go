@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -23,10 +22,7 @@ import (
 type renderOpts struct {
 	cfgPath string
 
-	out     string // directory to write manifests into
-	appOut  string // where to also write the Argo Application, if anywhere
-	repoURL string // repo the Application syncs from
-	appPath string // path within that repo
+	out string // directory to write manifests into
 
 	dryRun bool
 	force  bool
@@ -59,9 +55,6 @@ func renderCmd() *cobra.Command {
 	// above the ones it should have replaced, leaving the originals
 	// stale while reporting success.
 	cmd.Flags().StringVar(&o.out, "out", "", "directory to write manifests into (default: deploy/ beside config.yaml)")
-	cmd.Flags().StringVar(&o.appOut, "app-out", "", "also write the Argo Application here")
-	cmd.Flags().StringVar(&o.repoURL, "repo-url", "https://github.com/ChristopherScot/homelab", "repo the Application syncs from")
-	cmd.Flags().StringVar(&o.appPath, "app-path", "", "path within that repo (default: service name)")
 	cmd.Flags().BoolVar(&o.dryRun, "dry-run", false, "check against the running service and write nothing")
 	cmd.Flags().BoolVar(&o.force, "force", false, "write even if the change would break the running service")
 	return cmd
@@ -106,11 +99,6 @@ func runRender(o renderOpts) error {
 	if err != nil {
 		return err
 	}
-	if unknown := render.UnknownOverrides(c, outs); len(unknown) > 0 {
-		return fmt.Errorf("overrides name file(s) this service does not generate: %s",
-			strings.Join(unknown, ", "))
-	}
-
 	out := o.out
 	if out == "" {
 		out = filepath.Join(filepath.Dir(o.cfgPath), "deploy")
@@ -127,18 +115,5 @@ func runRender(o renderOpts) error {
 		fmt.Println("wrote", p)
 	}
 
-	if o.appOut != "" {
-		p := o.appPath
-		if p == "" {
-			p = c.Name
-		}
-		if err := os.MkdirAll(filepath.Dir(o.appOut), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(o.appOut, []byte(render.Application(c, o.repoURL, p)), 0o644); err != nil {
-			return err
-		}
-		fmt.Println("wrote", o.appOut)
-	}
 	return nil
 }

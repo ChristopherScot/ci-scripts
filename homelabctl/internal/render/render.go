@@ -4,6 +4,7 @@
 package render
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -119,6 +120,17 @@ func All(c *config.Config) ([]Output, error) {
 		return nil, fmt.Errorf("overrides name file(s) this service does not generate: %s (it renders: %s)",
 			strings.Join(unknown, ", "), strings.Join(resourceNames(out), ", "))
 	}
+	// After the manifest checks and deliberately NOT through add(): this
+	// is generator input, not a Kubernetes resource. Passing it through
+	// add() would offer it to patches keyed by resource kind, let an
+	// override replace it, and list it in kustomization.yaml's resources,
+	// where Argo would try to apply a JSON file as a manifest.
+	entry, err := AppEntry(c)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, Output{Path: AppEntryFile, Body: entry})
+
 	if shadowed := ShadowedPatches(c, out); len(shadowed) > 0 {
 		return nil, fmt.Errorf("these patches are shadowed by an override and would not apply: %s\n"+
 			"an override replaces a file wholesale, so a patch for a kind inside it never runs.\n"+
@@ -183,12 +195,19 @@ func UnknownPatchKinds(c *config.Config, outs []Output) []string {
 	return unknown
 }
 
+// resourceNames is what kustomization.yaml lists under `resources:`.
+//
+// Only Kubernetes manifests belong there. kustomization.yaml would list
+// itself, and argocd.json is input for the ApplicationSet generator, not
+// a resource - listing either makes Argo try to apply it, and a JSON file
+// applied as a manifest fails the whole sync.
 func resourceNames(out []Output) []string {
 	var names []string
 	for _, o := range out {
-		if o.Path != "kustomization.yaml" {
-			names = append(names, o.Path)
+		if o.Path == "kustomization.yaml" || o.Path == AppEntryFile {
+			continue
 		}
+		names = append(names, o.Path)
 	}
 	return names
 }
@@ -646,6 +665,48 @@ metadata:
 `, h.Name, c.Name)
 	}
 	return b.String()
+}
+
+// AppEntryFile is where a service publishes its generator input. The
+// ApplicationSet's files generator globs for this name, so it is part of
+// that resource's contract rather than an arbitrary choice here.
+const AppEntryFile = "argocd.json"
+
+// AppParams is what the ApplicationSet generator reads for one service:
+// the values its template cannot derive from the directory name alone.
+//
+// Field names are the generator's parameter names, so the template says
+// {{ .namespace }} and this says `json:"namespace"`. Renaming one without
+// the other leaves the template rendering an empty string into a live
+// Application, so they are declared together here.
+type AppParams struct {
+	Name      string `json:"name"`
+	Team      string `json:"team"`
+	Namespace string `json:"namespace"`
+	Image     string `json:"image"` // repository, no tag: the template appends :latest
+}
+
+// AppEntry is the generator input for one service, as deploy/argocd.json.
+//
+// This replaces rendering a whole Argo Application per service. The
+// Application is now one ApplicationSet template in the homelab repo, and
+// a service publishes only the handful of values that differ - so a
+// convention change (a sync option, an annotation) is one edit to the
+// template rather than a re-render of every service.
+//
+// Marshalled rather than formatted: a name or team containing a quote
+// would otherwise produce a file that parses as something else.
+func AppEntry(c *config.Config) (string, error) {
+	b, err := json.MarshalIndent(AppParams{
+		Name:      c.Name,
+		Team:      c.Team,
+		Namespace: c.Namespace,
+		Image:     c.Image.Repository,
+	}, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b) + "\n", nil
 }
 
 // Application renders the Argo Application, including the full

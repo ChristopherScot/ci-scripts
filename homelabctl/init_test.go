@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
+	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/render"
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/runtime"
 )
 
@@ -236,10 +237,18 @@ func TestInitWritesManifestsWhereRenderDoes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "deploy", "deployment.yaml")); err == nil {
 		t.Error("a manifest was written flat into deploy/, where render would not put it")
 	}
-	// The Argo Application stays at the top: it belongs to
-	// app-of-apps/, not to the service's own directory.
-	if _, err := os.Stat(filepath.Join(dir, "deploy", "_argocd-application.yaml")); err != nil {
-		t.Errorf("deploy/_argocd-application.yaml missing: %v", err)
+	// argocd.json sits WITH the manifests, unlike the per-service Argo
+	// Application it replaced: the ApplicationSet's files generator globs
+	// */argocd.json in the homelab repo, so it has to travel with the
+	// directory rather than sit above it.
+	if _, err := os.Stat(filepath.Join(dir, "deploy", "svc", render.AppEntryFile)); err != nil {
+		t.Errorf("deploy/svc/%s missing: %v", render.AppEntryFile, err)
+	}
+	// And the file it replaced is gone. Leaving it behind would mean two
+	// things claiming to define the Application, with the stale one still
+	// being applied by app-of-apps.
+	if _, err := os.Stat(filepath.Join(dir, "deploy", "_argocd-application.yaml")); err == nil {
+		t.Error("init still writes _argocd-application.yaml, which the ApplicationSet replaced")
 	}
 }
 

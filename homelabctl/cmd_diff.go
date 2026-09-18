@@ -86,24 +86,12 @@ func runDiff(cfgPath, against, repoURL string) error {
 		changed = append(changed, o.Path)
 	}
 
-	// The Argo Application lives in the app-of-apps directory rather than
-	// the service directory, and it is the file that decides whether the
-	// service is synced at all - the most consequential one to get wrong,
-	// and the one most easily forgotten in a hand copy.
-	appPath := filepath.Join(against, "app-of-apps", "apps", c.AppName()+".yaml")
-	want := render.Application(c, repoURL, c.AppName())
-	switch live, err := os.ReadFile(appPath); {
-	case os.IsNotExist(err):
-		fmt.Printf("\n--- app-of-apps/apps/%s.yaml (missing; Argo is not syncing this service)\n", c.AppName())
-		printDiff("", want)
-		changed = append(changed, "app-of-apps/apps/"+c.AppName()+".yaml")
-	case err != nil:
-		return err
-	case normalise(string(live)) != normalise(want):
-		fmt.Printf("\n--- app-of-apps/apps/%s.yaml\n", c.AppName())
-		printDiff(string(live), want)
-		changed = append(changed, "app-of-apps/apps/"+c.AppName()+".yaml")
-	}
+	// No special case for the Argo Application any more: the service
+	// publishes argocd.json, an ApplicationSet in the homelab repo
+	// templates the Application from it, and that file is compared by the
+	// loop above like every other output. What used to be the most
+	// consequential file to get wrong - and the one most easily forgotten
+	// in a hand copy - is now ordinary.
 
 	// A file in the repo that render no longer produces is drift too - it
 	// will keep being applied by Argo and nothing generates it.
