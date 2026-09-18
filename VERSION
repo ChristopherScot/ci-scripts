@@ -1,4 +1,6 @@
-v1.6.1
+v1.7.0
+
+v1.7.0 check cross-references kustomization.yaml against the directory
 
 v1.6.1 a manifest cannot take a generated file's name, and every document is validated
 

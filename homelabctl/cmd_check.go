@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,6 +107,71 @@ func checkESOVersion(add func(string, ...any)) {
 		"re-rendering every service", render.ESOAPIVersion)
 }
 
+// isYAML reports whether a filename is a manifest this should read.
+//
+// Both spellings: a file named db.yml is copied into deploy/ and listed
+// in resources: exactly like db.yaml, and checking only one extension
+// left the other entirely unvalidated.
+func isYAML(name string) bool {
+	return strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
+}
+
+// checkResources cross-references kustomization.yaml against the
+// directory, in both directions.
+//
+// This is the check that catches a whole class rather than one bug.
+// Argo applies exactly what `resources:` lists, so the two ways for
+// that list to be wrong are both silent:
+//
+//   - a manifest on disk that nothing lists is never applied. A user
+//     adds a PVC, commits it, sees it in git, and it is not deployed.
+//   - a listed file that is not on disk fails the whole sync, taking
+//     the Deployment and Service with it.
+//
+// Three separate bugs produced the first shape - a manifest whose name
+// collided with a generated file, a stale kustomization.yaml kept by
+// `init` on a re-run, and a .yml file check never opened - and each
+// would have been caught here without knowing anything about how it
+// arose.
+//
+// Duplicates are reported too: a name listed twice makes kustomize
+// refuse the directory outright.
+func checkResources(dir, kustomization string, add func(string, ...any)) {
+	var k struct {
+		Resources []string `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal([]byte(kustomization), &k); err != nil {
+		return // reported as invalid YAML by the caller's own loop
+	}
+
+	listed := map[string]int{}
+	for _, r := range k.Resources {
+		listed[r]++
+	}
+	for name, n := range listed {
+		if n > 1 {
+			add("kustomization.yaml lists %s %d times; kustomize refuses a duplicate resource", name, n)
+		}
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			add("kustomization.yaml lists %s, which is not in %s - the whole app fails to sync", name, dir)
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !isYAML(e.Name()) || e.Name() == "kustomization.yaml" {
+			continue
+		}
+		if listed[e.Name()] == 0 {
+			add("%s is in %s but not listed in kustomization.yaml, so Argo never applies it",
+				e.Name(), dir)
+		}
+	}
+}
+
 func runCheck(dir string) error {
 
 	var problems []string
@@ -119,6 +186,9 @@ func runCheck(dir string) error {
 
 	kPath := filepath.Join(dir, "kustomization.yaml")
 	kb, err := os.ReadFile(kPath)
+	if err == nil {
+		checkResources(dir, string(kb), add)
+	}
 	switch {
 	case err != nil:
 		// The failure that cost the most: without it, image-updater skips
@@ -136,7 +206,12 @@ func runCheck(dir string) error {
 		return err
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+		// .yml as well as .yaml. A manifest named db.yml - the extension
+		// this repo uses for openapi.yml - was copied into deploy/ and
+		// listed in resources:, and check never opened it. A CHANGEME
+		// placeholder in db.yml passed where the same file as db.yaml
+		// was correctly flagged.
+		if e.IsDir() || !isYAML(e.Name()) {
 			continue
 		}
 		p := filepath.Join(dir, e.Name())
@@ -146,13 +221,20 @@ func runCheck(dir string) error {
 		}
 		// Parse it: regexes over lines cannot tell valid YAML from
 		// garbage, and shipping garbage is the failure this guards.
-		var doc any
-		for i, chunk := range strings.Split(string(b), "\n---\n") {
-			if strings.TrimSpace(chunk) == "" {
-				continue
+		// Decoded, not split on a literal "\n---\n": CRLF makes the
+		// separator "---\r" and a trailing space makes it "--- ", and
+		// yaml.Unmarshal then reads only the FIRST document of the
+		// stream and returns nil. Everything after it went unchecked.
+		dec := yaml.NewDecoder(strings.NewReader(string(b)))
+		for i := 1; ; i++ {
+			var doc any
+			err := dec.Decode(&doc)
+			if errors.Is(err, io.EOF) {
+				break
 			}
-			if err := yaml.Unmarshal([]byte(chunk), &doc); err != nil {
-				add("%s: document %d is not valid YAML: %v", p, i+1, err)
+			if err != nil {
+				add("%s: document %d is not valid YAML: %v", p, i, err)
+				break
 			}
 		}
 		for i, line := range strings.Split(string(b), "\n") {
