@@ -76,7 +76,7 @@ func initCmd() *cobra.Command {
 	// config wins on a re-run.
 	f.StringVar(&o.runtimeID, "runtime", "go-service",
 		"runtime: "+strings.Join(runtime.Names(), ", "))
-	f.StringVar(&o.owner, "owner", "christopherscot", "GitHub owner")
+	f.StringVar(&o.owner, "owner", "", "GitHub owner (default: the account gh is logged in as)")
 	f.StringVar(&o.parentRepo, "parent-repo", "", "add this service to an existing repo (monorepo) instead of creating one")
 	f.BoolVar(&o.private, "private", false, "create the GitHub repo private (image-updater then needs a registry credential)")
 	// The one value-flag that survives. It decides which files are
@@ -114,6 +114,12 @@ func runInit(o initOpts) error {
 	r, err := runtime.Get(o.runtimeID)
 	if err != nil {
 		return err
+	}
+
+	if o.owner == "" {
+		if o.owner, err = githubOwner(); err != nil {
+			return err
+		}
 	}
 
 	c, err := buildConfig(o)
@@ -280,11 +286,23 @@ func buildConfig(o initOpts) (*config.Config, error) {
 		return existing, nil
 	}
 
+	// Lowercased: a registry path must be lowercase, while the GitHub
+	// owner keeps whatever casing the account has. They were the same
+	// string while the owner was a hardcoded lowercase default; now that
+	// it comes from gh, "ChristopherScot" would render
+	// ghcr.io/ChristopherScot/svc and fail at docker push in CI, after
+	// everything else had already succeeded.
 	image := fmt.Sprintf("ghcr.io/%s/%s", o.owner, o.name)
 	if o.parentRepo != "" {
 		// One registry path per repo would collide in a monorepo.
 		image = fmt.Sprintf("ghcr.io/%s/%s-%s", o.owner, o.parentRepo, o.name)
 	}
+	// Lowercased as a whole, because every component can carry casing:
+	// the owner comes from gh ("ChristopherScot") and the parent repo is
+	// whatever the repo is called. A registry path must be lowercase, so
+	// ghcr.io/ChristopherScot/MyRepo-svc fails at docker push in CI -
+	// after init, render and the build had all succeeded.
+	image = strings.ToLower(image)
 	// From Defaults(), not a bare literal: hardening and metrics are on
 	// by default and their zero value is off, so a literal would scaffold
 	// an unhardened, unscraped service - and now that config.yaml is
@@ -470,6 +488,27 @@ func checkOverwrite(want, scaffolding map[string]bool) error {
 
 // setupLocal writes the service. Existing files are left alone so a re-run
 // does not clobber work in progress.
+// githubOwner is the account init creates under, read from gh rather than
+// defaulted to a name.
+//
+// It used to default to a hardcoded owner, which is wrong for anyone but
+// its author in a way nothing catches: the owner decides the GitHub repo,
+// the ghcr.io image path and the Go module path, so a teammate who did
+// not pass --owner got a service whose image pushes to someone else's
+// namespace. init already shells out to gh for every repo operation, so
+// asking it who is logged in adds no dependency.
+func githubOwner() (string, error) {
+	out, err := exec.Command("gh", "api", "user", "--jq", ".login").Output()
+	if err != nil {
+		return "", fmt.Errorf("gh could not say who you are logged in as (%w); pass --owner", err)
+	}
+	owner := strings.TrimSpace(string(out))
+	if owner == "" {
+		return "", fmt.Errorf("gh reported no login; pass --owner")
+	}
+	return owner, nil
+}
+
 func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

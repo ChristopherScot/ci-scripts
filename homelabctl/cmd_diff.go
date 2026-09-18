@@ -19,7 +19,7 @@ import (
 // that actually reaches the cluster was never shown to anyone before it
 // landed. This prints it.
 func diffCmd() *cobra.Command {
-	var against, repoURL string
+	var against string
 	cmd := &cobra.Command{
 		Use:   "diff",
 		Short: "show what rendering would change in the GitOps repo",
@@ -32,15 +32,14 @@ func diffCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runDiff(path, against, repoURL)
+			return runDiff(path, against)
 		},
 	}
 	cmd.Flags().StringVar(&against, "against", "", "GitOps repo checkout to compare with (default: $HOMELAB_REPO or ~/homelab)")
-	cmd.Flags().StringVar(&repoURL, "repo-url", "https://github.com/ChristopherScot/homelab", "repo the Application syncs from")
 	return cmd
 }
 
-func runDiff(cfgPath, against, repoURL string) error {
+func runDiff(cfgPath, against string) error {
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return err

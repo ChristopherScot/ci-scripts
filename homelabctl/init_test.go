@@ -328,3 +328,28 @@ func TestOverwriteNormalisesItsArgument(t *testing.T) {
 		}
 	}
 }
+
+// A registry path must be lowercase; a GitHub owner need not be. While
+// --owner defaulted to a lowercase literal these were the same string,
+// so nothing noticed they are different rules. Reading the owner from gh
+// makes "ChristopherScot" real, and ghcr.io/ChristopherScot/svc fails at
+// docker push in CI - after init, render and the whole build succeeded.
+func TestImagePathIsLowercasedIndependentlyOfTheOwner(t *testing.T) {
+	for _, owner := range []string{"ChristopherScot", "christopherscot", "MixedCase"} {
+		c, err := buildConfig(initOpts{name: "svc", owner: owner, runtimeID: "go-service"})
+		if err != nil {
+			t.Fatalf("owner %q: %v", owner, err)
+		}
+		if got := c.Image.Repository; got != strings.ToLower(got) {
+			t.Errorf("owner %q produced image %q, which a registry rejects", owner, got)
+		}
+	}
+	// And the monorepo path, which builds the string separately.
+	c, err := buildConfig(initOpts{name: "svc", owner: "ChristopherScot", parentRepo: "MyRepo", runtimeID: "go-service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Image.Repository; got != strings.ToLower(got) {
+		t.Errorf("monorepo image %q is not lowercase", got)
+	}
+}
