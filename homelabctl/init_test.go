@@ -440,3 +440,68 @@ func TestTrustCommandKeepsRepoCasingAndLowercasesOnlyTheScope(t *testing.T) {
 		t.Errorf("npm scope is not lowercased, which npm rejects:\n%s", got)
 	}
 }
+
+// Every homelabctl command this tool prints has to be one a user can run.
+//
+// printNext told people to run `homelabctl vault config.yaml --apply`
+// for a long time. vaultCmd is cobra.NoArgs, so that fails with
+// `unknown command "config.yaml"`. The same wrong string was also baked
+// into the generated header in vaultCommands - two copies, both wrong,
+// neither checked by anything.
+//
+// Runs the printed command's arguments through the real command tree
+// rather than matching text: the bug was an arity mismatch, and only
+// cobra knows the arity.
+func TestPrintedCommandsAreRunnable(t *testing.T) {
+	var buf bytes.Buffer
+	stdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+
+	c := config.Defaults()
+	c.Name = "svc"
+	c.Team = "platform"
+	c.Runtime = "go-service"
+	c.Spec = true
+	printNext(initOpts{name: "svc", owner: "Example"}, &c, "svc", false)
+
+	w.Close()
+	os.Stdout = stdout
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+
+	root := rootCmd()
+	for _, line := range strings.Split(buf.String(), "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "homelabctl ")
+		if !ok {
+			continue
+		}
+		args := strings.Fields(rest)
+		// Only the flagless prefix: resolving the subcommand is what
+		// catches an argument cobra would reject as a subcommand name.
+		var positional []string
+		for _, a := range args {
+			if strings.HasPrefix(a, "-") {
+				break
+			}
+			positional = append(positional, a)
+		}
+		cmd, remaining, err := root.Find(positional)
+		if err != nil {
+			t.Errorf("printed %q, which does not resolve: %v", line, err)
+			continue
+		}
+		if cmd.Args == nil {
+			continue
+		}
+		if err := cmd.Args(cmd, remaining); err != nil {
+			t.Errorf("printed %q, but %s rejects those arguments: %v",
+				line, cmd.Name(), err)
+		}
+	}
+}

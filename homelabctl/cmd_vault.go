@@ -91,7 +91,7 @@ func serviceRole(c *config.Config) vault.Role {
 func vaultCommands(c *config.Config) string {
 	r := serviceRole(c)
 	return fmt.Sprintf(`# Vault policy and role for %s, derived from its config.
-# Apply with: homelabctl vault config.yaml --apply
+# Apply with: homelabctl vault --apply
 
 vault policy write %s - <<'POLICY'
 %sPOLICY

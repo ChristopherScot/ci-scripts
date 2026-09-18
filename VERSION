@@ -1,4 +1,6 @@
-v1.4.0
+v1.5.0
+
+v1.5.0 init stops narrating deploy; render.Files names the deploy plane's inventory
 
 v1.4.0 manifests: raw Kubernetes resources a service owns, applied with the rest
 
