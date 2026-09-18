@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/render"
@@ -351,5 +352,36 @@ func TestImagePathIsLowercasedIndependentlyOfTheOwner(t *testing.T) {
 	}
 	if got := c.Image.Repository; got != strings.ToLower(got) {
 		t.Errorf("monorepo image %q is not lowercase", got)
+	}
+}
+
+// The owner decides the GitHub repo, the image path and the module path,
+// so it is asked for rather than defaulted. These are the paths that must
+// not reach a prompt: an explicit flag, an exported env var, and a
+// non-interactive run, which would otherwise hang a CI job forever
+// instead of failing it.
+func TestOwnerResolutionOrder(t *testing.T) {
+	t.Setenv(ownerEnv, "from-env")
+
+	if got, err := resolveOwner(initOpts{owner: "from-flag"}); err != nil || got != "from-flag" {
+		t.Errorf("flag should win: got %q, %v", got, err)
+	}
+	if got, err := resolveOwner(initOpts{}); err != nil || got != "from-env" {
+		t.Errorf("env should be used when no flag: got %q, %v", got, err)
+	}
+
+	// With neither, a non-interactive run must not block on stdin.
+	t.Setenv(ownerEnv, "")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// It may succeed via the gh suggestion or fail for want of one;
+		// what matters is that it returns rather than waiting to be typed at.
+		_, _ = resolveOwner(initOpts{yes: true})
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("resolveOwner blocked on input in a non-interactive run")
 	}
 }
