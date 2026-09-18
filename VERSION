@@ -1,6 +1,6 @@
 v1.1.11
 
-v1.1.11 one publish.yaml per repo, so npm trusted publishing is set up once
+v1.1.11 one publish.yaml per repo; init prints the npm trust command
 
 v1.1.10 regen syncs the TypeScript client to the spec version; go-tui runtime
 

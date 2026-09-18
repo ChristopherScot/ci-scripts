@@ -392,3 +392,29 @@ func TestOwnerResolutionOrder(t *testing.T) {
 		t.Fatal("resolveOwner blocked on input in a non-interactive run")
 	}
 }
+
+// A trusted publisher is configured against the REPOSITORY, which is the
+// parent in a monorepo and the service's own repo otherwise. Getting
+// this wrong prints a command naming a repository that does not exist,
+// and the failure is an opaque npm error rather than anything about
+// repositories.
+func TestPublishRepoNamesTheRepositoryNotTheService(t *testing.T) {
+	if got := publishRepo(initOpts{name: "widget", parentRepo: "shop"}); got != "shop" {
+		t.Errorf("monorepo: publishRepo = %q, want shop", got)
+	}
+	if got := publishRepo(initOpts{name: "gadget"}); got != "gadget" {
+		t.Errorf("standalone: publishRepo = %q, want gadget", got)
+	}
+}
+
+// The publish workflow is at the repository root in both layouts,
+// because one file covers every client in the repo and npm fixes the
+// filename at setup.
+func TestPublishWorkflowPathIsTheRepoRoot(t *testing.T) {
+	if got := publishWorkflowPath(initOpts{name: "widget", parentRepo: "shop"}); got != "../../.github/workflows/publish.yaml" {
+		t.Errorf("monorepo: %q", got)
+	}
+	if got := publishWorkflowPath(initOpts{name: "gadget"}); got != ".github/workflows/publish.yaml" {
+		t.Errorf("standalone: %q", got)
+	}
+}
