@@ -113,8 +113,9 @@ func init() {
 		lock: [][]string{{"npm", "install", "--package-lock-only"}},
 		files: map[string]tmpl{
 			"package.json.tmpl":   {dst: "package.json"},
-			"server.js.tmpl":      {dst: "server.js"},
-			"server.test.js.tmpl": {dst: "server.test.js"},
+			"tsconfig.json.tmpl":  {dst: "tsconfig.json"},
+			"server.ts.tmpl":      {dst: "server.ts"},
+			"server.test.ts.tmpl": {dst: "server.test.ts"},
 			"gitignore":           {dst: ".gitignore"},
 			"dockerignore":        {dst: ".dockerignore"},
 		},

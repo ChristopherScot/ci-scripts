@@ -40,4 +40,7 @@ COPY --chown=65532:65532 . .
 USER 65532:65532
 EXPOSE {{ .Port }}
 # The distroless nodejs image's entrypoint is already `node`.
-CMD ["server.js"]
+# server.ts, not a compiled artifact: Node strips the types at load time,
+# so the image ships the source it was written in and there is no build
+# stage to keep in sync.
+CMD ["server.ts"]

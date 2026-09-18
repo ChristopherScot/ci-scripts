@@ -24,5 +24,16 @@
       # Not --if-present: the scaffold always ships tests, so a missing
       # script means someone removed them, and CI should say so rather
       # than skip silently.
+      # Before the tests, because a type error is a faster and clearer
+      # failure than whatever it causes at runtime.
+      #
+      # --if-present, because not every node service consumes a generated
+      # client and one without a typecheck script should not fail here.
+      # A service that HAS one gets its API contract checked: this is
+      # what catches a client that has drifted from the spec, which
+      # otherwise shows up as a 404 in production or not at all.
+      - name: Typecheck
+        run: npm run typecheck --if-present
+
       - name: Test
         run: npm test

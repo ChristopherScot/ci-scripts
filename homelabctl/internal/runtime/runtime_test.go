@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+// isSource is a file a runtime writes as code, whatever language.
+// node-service is TypeScript; its generated client stays .js because
+// that is what publishes to npm.
+func isSource(path string) bool {
+	for _, ext := range []string{".go", ".js", ".ts"} {
+		if strings.HasSuffix(path, ext) {
+			return true
+		}
+	}
+	return false
+}
+
 func testParams() Params {
 	return Params{Name: "svc", Module: "github.com/o/svc", Owner: "o", Port: 3000,
 		Image: "ghcr.io/o/svc", Spec: true}
@@ -301,7 +313,7 @@ func TestDeployableRuntimesStampLogContext(t *testing.T) {
 		// once already.
 		var entry string
 		for _, f := range a.Files {
-			if strings.HasSuffix(f.Path, ".go") || strings.HasSuffix(f.Path, ".js") {
+			if isSource(f.Path) {
 				entry += f.Body
 			}
 		}
@@ -340,7 +352,7 @@ func TestDeployableRuntimesSetServiceDefaults(t *testing.T) {
 		// does.
 		var entry string
 		for _, f := range a.Files {
-			if strings.HasSuffix(f.Path, ".go") || strings.HasSuffix(f.Path, ".js") {
+			if isSource(f.Path) {
 				entry += f.Body
 			}
 		}
@@ -1542,5 +1554,65 @@ func TestGeneratedClientCarriesItsRepositoryURL(t *testing.T) {
 				t.Errorf("npm scope is not lowercased:\n%s", pkg)
 			}
 		})
+	}
+}
+
+// node-service is TypeScript, run directly.
+//
+// Node strips types at load time, so there is no build step, no bundler
+// and no dist/ - the container runs `node server.ts` and the distroless
+// image needs nothing extra. That property is easy to lose: adding a
+// build stage, or emitting JavaScript, would mean the image runs an
+// artifact that can drift from the source it was generated from.
+//
+// Stripping is not checking, so the typecheck script is what actually
+// verifies the types, and CI runs it.
+func TestNodeServiceIsTypeScriptWithNoBuildStep(t *testing.T) {
+	r, err := Get("node-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := r.Artifacts(testParams())
+
+	files := map[string]string{}
+	for _, f := range a.Files {
+		files[f.Path] = f.Body
+	}
+
+	for _, want := range []string{"server.ts", "server.test.ts", "tsconfig.json"} {
+		if _, ok := files[want]; !ok {
+			t.Errorf("no %s", want)
+		}
+	}
+	if _, ok := files["server.js"]; ok {
+		t.Error("still ships server.js")
+	}
+
+	// Run directly, not compiled: nothing emitted, and the container
+	// starts the TypeScript source.
+	if !strings.Contains(files["tsconfig.json"], `"noEmit": true`) {
+		t.Error("tsconfig emits output; the point is that Node runs the source")
+	}
+	if !strings.Contains(a.Dockerfile, `CMD ["server.ts"]`) {
+		t.Error("the image does not start server.ts")
+	}
+	for _, unwanted := range []string{"tsc --build", "npm run build", "dist/"} {
+		if strings.Contains(a.Dockerfile, unwanted) {
+			t.Errorf("Dockerfile has a build step: %q", unwanted)
+		}
+	}
+
+	// Type stripping erases rather than compiles, so syntax needing code
+	// generation cannot run. tsc has to reject it here instead.
+	if !strings.Contains(files["tsconfig.json"], `"erasableSyntaxOnly": true`) {
+		t.Error("tsconfig allows syntax Node's type stripping cannot execute")
+	}
+
+	// And the check itself, or the types are decoration.
+	if !strings.Contains(files["package.json"], `"typecheck"`) {
+		t.Error("no typecheck script; stripping types is not checking them")
+	}
+	if !strings.Contains(a.Workflow, "npm run typecheck") {
+		t.Error("CI does not typecheck")
 	}
 }

@@ -1,4 +1,6 @@
-v1.1.13
+v1.2.0
+
+v1.2.0 node-service is TypeScript, run directly with no build step
 
 v1.1.13 regen keeps the module path and the owner's real casing
 
