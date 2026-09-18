@@ -40,10 +40,15 @@ func init() {
 			"paging.go.tmpl":      {dst: "api/paging.go", specOnly: true},
 			"paging_test.go.tmpl": {dst: "api/paging_test.go", specOnly: true},
 
-			// The TypeScript client. package.json sits at the repo root
-			// because npm looks for it there when installing from git -
-			// `files` keeps the Go source out of the published tarball.
-			"clients_ts_package.json.tmpl": {dst: "package.json", specOnly: true},
+			// The TypeScript client. Its package.json sits WITH the code
+			// it describes rather than at the service root: it used to be
+			// at the root so `npm install github:owner/repo` could find
+			// it, but that never worked in a monorepo - npm's git
+			// installer reads package.json from the REPOSITORY root, and
+			// a monorepo puts the service at services/<name>/. The client
+			// is published to npmjs instead, so nothing installs from git
+			// and the manifest can live where it belongs.
+			"clients_ts_package.json.tmpl": {dst: "clients/ts/package.json", specOnly: true},
 			"clients_ts_index.js.tmpl":     {dst: "clients/ts/index.js", specOnly: true},
 			"clients_ts_index.d.ts.tmpl":   {dst: "clients/ts/index.d.ts", specOnly: true},
 

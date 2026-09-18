@@ -659,18 +659,29 @@ func TestGoServiceShipsATypeScriptClient(t *testing.T) {
 		files[f.Path] = f.Body
 	}
 
-	// npm looks for package.json at the repo root when installing from
-	// git, which is how a consumer gets this without a registry.
-	pkg, ok := files["package.json"]
+	// The manifest sits WITH the client, not at the service root. It was
+	// at the root so `npm install github:owner/repo` could find it, but
+	// npm's git installer reads package.json from the REPOSITORY root -
+	// which a monorepo service is not - so that never worked for both
+	// layouts. The client is published to npmjs instead.
+	//
+	// Beside index.js is also where it has to be for the client to read
+	// its own version at runtime: index.js imports ./package.json.
+	pkg, ok := files["clients/ts/package.json"]
 	if !ok {
-		t.Fatal("no root package.json; `npm install git+...` cannot find the client")
+		t.Fatal("no clients/ts/package.json; there is nothing to publish")
 	}
 	if !strings.Contains(pkg, `"version": "`+InitialSpecVersion+`"`) {
 		t.Error("package.json version does not track the spec version")
 	}
-	// Without `files`, the published tarball carries the Go service too.
-	if !strings.Contains(pkg, `"files"`) {
-		t.Error("package.json has no files list; the Go source would ship to consumers")
+	// Publishing a scoped package defaults to private, which fails for an
+	// account without a paid plan - and fails at publish time, after the
+	// Go tag for the same spec version has already been pushed.
+	if !strings.Contains(pkg, `"access": "public"`) {
+		t.Error("package.json does not request public access; a scoped publish would be private")
+	}
+	if files["package.json"] != "" {
+		t.Error("a package.json at the service root is the old git-install layout")
 	}
 
 	js, ok := files["clients/ts/index.js"]
@@ -681,6 +692,13 @@ func TestGoServiceShipsATypeScriptClient(t *testing.T) {
 	// header cannot then disagree with the version a consumer installed.
 	if !strings.Contains(js, "pkg.version") {
 		t.Error("the TypeScript client hardcodes its version instead of reading package.json")
+	}
+	// Relative to index.js, which is the same directory. It used to be
+	// '../../package.json' because the manifest was at the service root;
+	// with the manifest moved, that path points outside the published
+	// tarball and the client fails to load for every consumer.
+	if !strings.Contains(js, "from './package.json'") {
+		t.Error("the client's package.json import does not point beside it")
 	}
 
 	for _, want := range []string{

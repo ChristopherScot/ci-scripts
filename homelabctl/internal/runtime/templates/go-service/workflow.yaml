@@ -145,3 +145,34 @@ jobs:
           git tag "v$version"
           git push origin "v$version"
           echo "tagged v$version - consumers can now: go get $GITHUB_REPOSITORY@v$version"
+          echo "publish=true" >> $GITHUB_OUTPUT
+        id: spec
+
+      # The TypeScript client, published on the same trigger as the Go
+      # tag above so both clients for one spec version appear together.
+      #
+      # Go consumers need no registry - a tag on this repo IS the client
+      # version. npm has no equivalent: `npm install github:owner/repo`
+      # reads package.json from the REPOSITORY root, which is not where a
+      # monorepo service lives, so publishing is the only path that works
+      # for both layouts.
+      - uses: actions/setup-node@v4
+        if: steps.spec.outputs.publish == 'true'
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish the TypeScript client
+        if: steps.spec.outputs.publish == 'true'
+        working-directory: {{ if .PathFilter }}{{ .PathFilter }}/{{ end }}clients/ts
+        env:
+          # Set this in the repo's secrets. Without it the job fails here
+          # rather than silently shipping a Go tag whose TypeScript
+          # counterpart does not exist.
+          NODE_AUTH_TOKEN: ${{ "{{" }} secrets.NPM_TOKEN {{ "}}" }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is not set; the TypeScript client cannot be published"
+            exit 1
+          fi
+          npm publish

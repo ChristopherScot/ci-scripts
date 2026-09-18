@@ -3,11 +3,12 @@
   "version": "{{ .SpecVersion }}",
   "description": "Typed client for the {{ .Name }} API, generated from its OpenAPI spec.",
   "type": "module",
-  "main": "clients/ts/index.js",
-  "types": "clients/ts/index.d.ts",
-  "files": [
-    "clients/ts"
-  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "dependencies": {
     "openapi-fetch": "^0.17.0"
   }
