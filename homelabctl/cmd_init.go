@@ -105,7 +105,7 @@ func runInit(o initOpts) error {
 	// 65532 would produce a pod that cannot exec its binary - "permission
 	// denied", no logs. A CLI has no pod, so hardening does not apply.
 	// One source of truth: the artifacts the runtime actually produces.
-	arts := r.Artifacts(artifactParams(o, c))
+	arts := r.Artifacts(artifactParams(c, o.owner, o.parentRepo))
 	isCLI := !arts.Deployable
 
 	if arts.Deployable && c.Hardened && !r.SupportsHardened() {
@@ -175,24 +175,36 @@ func run(dir string, groups ...[][]string) error {
 
 // artifactParams derives the render inputs from the options and config, so
 // the monorepo layout is decided in one place.
-func artifactParams(o initOpts, c *config.Config) runtime.Params {
+// artifactParams derives the render inputs, so the monorepo layout is
+// decided in one place.
+//
+// It takes only what the CONFIG cannot answer. Everything describing the
+// service - its name, port, image, team, whether it has a spec - comes
+// from the Config, which Complete() has already defaulted and validated.
+// The two arguments are the facts about where the repo lives, which
+// config.yaml deliberately does not store.
+//
+// The narrow signature is the point. This used to take the whole
+// initOpts alongside the Config and choose per field, and it chose
+// wrong: Port came from the flag while its neighbours came from the
+// config, so any caller working from an existing config.yaml - where
+// the flag is zero - rendered EXPOSE 0 and a readiness probe against
+// port 0. With the flags out of reach, that particular mistake cannot
+// be made again.
+func artifactParams(c *config.Config, owner, parentRepo string) runtime.Params {
 	p := runtime.Params{
-		Name:        o.name,
+		Name:        c.Name,
 		Team:        c.Team,
 		Spec:        c.Spec,
 		SpecVersion: runtime.InitialSpecVersion,
-		Owner:       o.owner,
-		// From the config, not the flag. Complete() has already
-		// defaulted it, and a caller that builds opts without a port -
-		// anything working from an existing config.yaml - would
-		// otherwise render EXPOSE 0 and a probe against port 0.
-		Port:  c.Port,
-		Image: c.Image.Repository,
+		Owner:       owner,
+		Port:        c.Port,
+		Image:       c.Image.Repository,
 	}
-	if o.parentRepo != "" {
-		p.PathFilter = filepath.Join("services", o.name)
+	if parentRepo != "" {
+		p.PathFilter = filepath.Join("services", c.Name)
 	}
-	p.Module = modulePath(o, c)
+	p.Module = modulePath(c, owner, parentRepo)
 	return p
 }
 
@@ -219,15 +231,15 @@ func mustCwd() string {
 //     Deriving this from the service name alone - which is what this did
 //     until 2026-09-17 - produced a path that pointed nowhere.
 //   - a repo of its own, named after the service.
-func modulePath(o initOpts, c *config.Config) string {
+func modulePath(c *config.Config, owner, parentRepo string) string {
 	if c.Module != "" {
 		return c.Module
 	}
-	if o.parentRepo != "" {
-		return fmt.Sprintf("github.com/%s/%s/%s", o.owner, o.parentRepo,
-			filepath.ToSlash(filepath.Join("services", o.name)))
+	if parentRepo != "" {
+		return fmt.Sprintf("github.com/%s/%s/%s", owner, parentRepo,
+			filepath.ToSlash(filepath.Join("services", c.Name)))
 	}
-	return fmt.Sprintf("github.com/%s/%s", o.owner, o.name)
+	return fmt.Sprintf("github.com/%s/%s", owner, c.Name)
 }
 
 // buildConfig is what the new service will be.
@@ -369,7 +381,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	a := r.Artifacts(artifactParams(o, c))
+	a := r.Artifacts(artifactParams(c, o.owner, o.parentRepo))
 
 	var written, skipped, forced []string
 	put := func(path, body string) error {
@@ -456,7 +468,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// nothing to resolve
 		// Generate first - a lockfile cannot resolve an import that does
 		// not exist yet - then upgrade, then lock what that settled on.
-	} else if err := run(dir, r.Generate(artifactParams(o, c)), r.Upgrade(), r.Lock()); err != nil {
+	} else if err := run(dir, r.Generate(artifactParams(c, o.owner, o.parentRepo)), r.Upgrade(), r.Lock()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 

@@ -86,40 +86,45 @@ func TestScaffoldPassesItsOwnCheck(t *testing.T) {
 func TestModulePath(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		opts   initOpts
+		owner  string
+		parent string
 		cfg    config.Config
 		want   string
 		reason string
 	}{
 		{
 			name:   "its own repo, named after the service",
-			opts:   initOpts{owner: "acme", name: "widget"},
+			owner:  "acme",
+			cfg:    config.Config{Name: "widget"},
 			want:   "github.com/acme/widget",
 			reason: "the ordinary case",
 		},
 		{
 			name:   "a monorepo service",
-			opts:   initOpts{owner: "acme", name: "widget", parentRepo: "platform"},
+			owner:  "acme",
+			parent: "platform",
+			cfg:    config.Config{Name: "widget"},
 			want:   "github.com/acme/platform/services/widget",
 			reason: "must match the directory, or the module is unfetchable",
 		},
 		{
 			name:   "config overrides",
-			opts:   initOpts{owner: "acme", name: "widget"},
-			cfg:    config.Config{Module: "github.com/acme/go-widget"},
+			owner:  "acme",
+			cfg:    config.Config{Name: "widget", Module: "github.com/acme/go-widget"},
 			want:   "github.com/acme/go-widget",
 			reason: "the repo is not named after the service",
 		},
 		{
 			name:   "config overrides a monorepo too",
-			opts:   initOpts{owner: "acme", name: "widget", parentRepo: "platform"},
-			cfg:    config.Config{Module: "example.com/custom/widget"},
+			owner:  "acme",
+			parent: "platform",
+			cfg:    config.Config{Name: "widget", Module: "example.com/custom/widget"},
 			want:   "example.com/custom/widget",
 			reason: "an explicit path always wins",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := modulePath(tc.opts, &tc.cfg); got != tc.want {
+			if got := modulePath(&tc.cfg, tc.owner, tc.parent); got != tc.want {
 				t.Errorf("modulePath() = %q, want %q (%s)", got, tc.want, tc.reason)
 			}
 		})
