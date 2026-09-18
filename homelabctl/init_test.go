@@ -261,6 +261,13 @@ func TestInitWritesManifestsWhereRenderDoes(t *testing.T) {
 //
 // What it refuses is content a template cannot restate.
 func TestOverwriteRefusesOnlyWhatATemplateCannotRestate(t *testing.T) {
+	// This drives the real cobra command rather than an initOpts, so it
+	// takes the owner from the environment as any non-interactive caller
+	// does. Without it the test depends on whether `gh` happens to be
+	// authenticated on the machine running it - which is true on a
+	// developer's laptop and false on a CI runner.
+	t.Setenv(ownerEnv, "o")
+
 	run := func(arg string) error {
 		dir := t.TempDir()
 		cmd := initCmd()
