@@ -51,3 +51,28 @@ func findConfig() (string, error) {
 		"cd into a service directory - the one holding its %s - and run this there",
 		configName, start, configName)
 }
+
+// repoRoot is the directory holding .git, walking up from the working
+// directory. Empty when there is none.
+//
+// Used to tell "I am inside the repo already" from "I need to descend
+// into it", which --parent-repo previously answered by comparing the
+// working directory's BASENAME to the repo name. That is only right in
+// the repo root: from services/alpha the basename is alpha, so init
+// descended anyway and produced services/alpha/<repo>/services/<name>.
+func repoRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}

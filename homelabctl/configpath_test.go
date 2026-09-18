@@ -134,3 +134,47 @@ func TestFindConfigPicksTheNearestServiceInAMonorepo(t *testing.T) {
 		t.Errorf("at the repo root findConfig returned %q, but no service lives there", got)
 	}
 }
+
+// --parent-repo puts a service at the monorepo's root, wherever it was
+// run from. It used to ask whether the WORKING DIRECTORY's basename was
+// the repo name, which is only true in the root: from services/alpha
+// the answer was no, so init descended and wrote
+// services/alpha/<repo>/services/<name>.
+func TestRepoRootIsFoundFromAnySubdirectory(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(repo, "services", "alpha", "api")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+
+	want, _ := filepath.EvalSymlinks(repo)
+	for _, from := range []string{repo, filepath.Join(repo, "services"), deep} {
+		if err := os.Chdir(from); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := filepath.EvalSymlinks(repoRoot())
+		if got != want {
+			t.Errorf("from %s: repoRoot = %q, want %q", from, got, want)
+		}
+	}
+}
+
+// Outside a repository there is no root, and the caller falls back to
+// treating --parent-repo as a directory to create.
+func TestRepoRootIsEmptyOutsideARepository(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := repoRoot(); got != "" {
+		t.Errorf("repoRoot outside a repository = %q, want empty", got)
+	}
+}

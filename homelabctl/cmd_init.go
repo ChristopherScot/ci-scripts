@@ -147,12 +147,21 @@ func runInit(o initOpts) error {
 			return fmt.Errorf("remote setup: %w", err)
 		}
 		dir = d
-	} else if o.parentRepo != "" && filepath.Base(mustCwd()) != o.parentRepo {
-		// --parent-repo names the monorepo to add to. Descend into it
-		// only when we are not already there: running from inside the
-		// repo is the normal case, and prepending its name produced
-		// platform/platform/services/<name>.
-		dir = o.parentRepo
+	} else if o.parentRepo != "" {
+		// --parent-repo names the monorepo to add to, and the service
+		// belongs at its root regardless of where this was run.
+		//
+		// Resolved from the repository rather than from the working
+		// directory. Asking "is the cwd's basename the repo name?" is
+		// only right when standing in the root: from services/alpha the
+		// answer was no, so init descended and produced
+		// services/alpha/<repo>/services/<name>. Asking where the
+		// repository IS has one answer from anywhere inside it.
+		if root := repoRoot(); filepath.Base(root) == o.parentRepo {
+			dir = root
+		} else {
+			dir = o.parentRepo
+		}
 	}
 	if o.remoteOnly {
 		printNext(o, c, dir, isCLI)
