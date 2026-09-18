@@ -91,7 +91,22 @@ const Schema = `{
       "description": "Generates a SecretStore and ExternalSecret bound to this service's own Vault path.",
       "properties": {
         "vaultPath": { "type": "string", "description": "Path under kv, e.g. myservice/config." },
-        "keys": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Environment variables to inject. NAME reads the property 'name'; a NAME: prop mapping reads 'prop', for a Vault path whose property is not named after the variable.",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 1,
+                "additionalProperties": { "type": "string" }
+              }
+            ]
+          }
+        }
       }
     },
     "ingress": {

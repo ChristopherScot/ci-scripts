@@ -74,7 +74,9 @@ func checkEnvDrift(c *config.Config, live *liveState) []Finding {
 	// and the advice, "add them under env:", would put them in plaintext.
 	if c.Secrets != nil {
 		for _, k := range c.Secrets.Keys {
-			declared[k] = true
+			// The env var, not the Vault property: what the pod sees is
+			// what a live deployment can be compared against.
+			declared[k.Env] = true
 		}
 	}
 

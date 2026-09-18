@@ -64,7 +64,7 @@ func TestAlwaysRendersKustomizationWithImages(t *testing.T) {
 func TestKustomizationListsEveryResource(t *testing.T) {
 	c := base()
 	c.Ingress = &config.Ingress{Host: "svc.example.com"}
-	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: []string{"TOKEN"}}
+	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: config.EnvKeys("TOKEN")}
 	out := mustAll(t, mustConfig(t, c), "ghcr.io/o/svc:latest")
 
 	var k string
@@ -210,7 +210,7 @@ func TestCronJobStillHardenedAndGetsSecrets(t *testing.T) {
 	c := base()
 	c.Kind = config.KindCronJob
 	c.Schedule = "0 3 * * *"
-	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: []string{"TOKEN"}}
+	c.Secrets = &config.Secrets{VaultPath: "svc/config", Keys: config.EnvKeys("TOKEN")}
 	for _, o := range mustAll(t, mustConfig(t, c), "img") {
 		if o.Path != "cronjob.yaml" {
 			continue

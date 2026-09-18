@@ -471,7 +471,7 @@ spec:
 `, sa, c.Namespace, store, c.Namespace, c.VaultRoleName(), sa, secret, c.Namespace, store, secret)
 	for _, k := range c.Secrets.Keys {
 		fmt.Fprintf(&b, "    - secretKey: %s\n      remoteRef: { key: %s, property: %s }\n",
-			k, c.Secrets.VaultPath, strings.ToLower(k))
+			k.Env, c.Secrets.VaultPath, k.Property)
 	}
 	return b.String()
 }

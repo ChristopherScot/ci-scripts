@@ -108,8 +108,66 @@ type Image struct {
 // own Vault path, following the per-app policy convention: one role, one
 // path, one namespace.
 type Secrets struct {
-	VaultPath string   `yaml:"vaultPath"`
-	Keys      []string `yaml:"keys"`
+	VaultPath string `yaml:"vaultPath"`
+
+	// Keys are the environment variables to inject, and the Vault
+	// properties they come from.
+	Keys []SecretKey `yaml:"keys"`
+}
+
+// SecretKey maps one environment variable to one property under the
+// service's Vault path. It decodes from either form:
+//
+//	keys:
+//	  - NTFY_TOKEN              # property: ntfy_token
+//	  - SHLINK_API_KEY: api-key # property: api-key
+//
+// The bare form derives the property by lowercasing, which is right when
+// the variable is named for what it is. The mapping form exists because
+// that derivation is wrong whenever the variable repeats its own app
+// name: SHLINK_API_KEY under vaultPath `shlink` would ask Vault for
+// `shlink/shlink_api_key`, and the convention across this cluster is that
+// the property does NOT repeat the path - `arr/api-keys` holds `sonarr`,
+// `authelia/keys` holds `session_secret`.
+//
+// Getting it wrong is not a render-time error: the manifests apply
+// cleanly and ESO then fails to sync a property that does not exist, so
+// the pod starts without the variable it needs.
+type SecretKey struct {
+	Env      string // the environment variable inside the pod
+	Property string // the property under VaultPath
+}
+
+// EnvKeys builds keys the conventional way, for a Config assembled in Go
+// code rather than decoded from YAML.
+func EnvKeys(envs ...string) []SecretKey {
+	out := make([]SecretKey, 0, len(envs))
+	for _, e := range envs {
+		out = append(out, SecretKey{Env: e, Property: strings.ToLower(e)})
+	}
+	return out
+}
+
+// UnmarshalYAML accepts a bare string or a single-entry mapping.
+func (k *SecretKey) UnmarshalYAML(value *yaml.Node) error {
+	var env string
+	if err := value.Decode(&env); err == nil {
+		k.Env = env
+		k.Property = strings.ToLower(env)
+		return nil
+	}
+
+	var m map[string]string
+	if err := value.Decode(&m); err != nil {
+		return fmt.Errorf("a secrets key must be `NAME` or `NAME: vault-property`")
+	}
+	if len(m) != 1 {
+		return fmt.Errorf("a secrets key mapping must have exactly one entry, got %d", len(m))
+	}
+	for env, prop := range m {
+		k.Env, k.Property = env, prop
+	}
+	return nil
 }
 
 type Ingress struct {

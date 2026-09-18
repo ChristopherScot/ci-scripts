@@ -211,3 +211,39 @@ func loadYAMLErr(t *testing.T, body string) (*Config, error) {
 	}
 	return Load(path)
 }
+
+// A bare key derives its Vault property by lowercasing; a mapping states
+// it. The mapping form exists because the derivation is wrong whenever
+// the variable repeats its own app name - SHLINK_API_KEY under vaultPath
+// `shlink` would ask for shlink/shlink_api_key, while the convention
+// across this cluster is that the property does not repeat the path.
+func TestSecretKeysDeriveOrStateTheirProperty(t *testing.T) {
+	c := loadYAML(t, "name: a\nteam: t\nruntime: go-service\n"+
+		"secrets:\n  vaultPath: shlink\n  keys:\n"+
+		"    - NTFY_TOKEN\n"+
+		"    - SHLINK_API_KEY: api-key\n")
+
+	want := []SecretKey{
+		{Env: "NTFY_TOKEN", Property: "ntfy_token"},
+		{Env: "SHLINK_API_KEY", Property: "api-key"},
+	}
+	if len(c.Secrets.Keys) != len(want) {
+		t.Fatalf("got %d keys, want %d", len(c.Secrets.Keys), len(want))
+	}
+	for i, w := range want {
+		if c.Secrets.Keys[i] != w {
+			t.Errorf("key %d = %+v, want %+v", i, c.Secrets.Keys[i], w)
+		}
+	}
+}
+
+// A mapping with more than one entry is a typo - almost certainly a
+// missing "- " on the following line - and silently dropping one of them
+// would leave the pod short an environment variable.
+func TestMultiEntrySecretKeyMappingIsRejected(t *testing.T) {
+	_, err := loadYAMLErr(t, "name: a\nteam: t\nruntime: go-service\n"+
+		"secrets:\n  vaultPath: p\n  keys:\n    - A: one\n      B: two\n")
+	if err == nil {
+		t.Fatal("a two-entry mapping was accepted")
+	}
+}
