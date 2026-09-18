@@ -129,14 +129,15 @@ jobs:
 
       - name: Tag when the spec version changed
         run: |
-          version=$(grep -m1 '^  version:' openapi.yml | awk '{print $2}')
+          spec={{ if .PathFilter }}{{ .PathFilter }}/{{ end }}openapi.yml
+          version=$(grep -m1 '^  version:' "$spec" | awk '{print $2}')
           if [ -z "$version" ]; then
-            echo "::error::openapi.yml has no info.version"
+            echo "::error::$spec has no info.version"
             exit 1
           fi
 
           # Nothing to do unless this push changed the spec's version.
-          if ! git diff HEAD~1 HEAD -- openapi.yml | grep -q '^+  version:'; then
+          if ! git diff HEAD~1 HEAD -- "$spec" | grep -q '^+  version:'; then
             echo "spec version unchanged; nothing to tag"
             exit 0
           fi

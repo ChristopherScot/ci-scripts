@@ -1124,9 +1124,21 @@ func TestSetupActionsGetRepoRootPathsInAMonorepo(t *testing.T) {
 		runtime string
 		inputs  []string
 	}{
-		{"go-service", []string{"go-version-file: services/svc/go.mod", "cache-dependency-path: services/svc/go.sum"}},
+		// The tag job reads and diffs openapi.yml, which is not at the
+		// repo root in a monorepo. It failed with "openapi.yml has no
+		// info.version" against a spec that has one.
+		{"go-service", []string{
+			"go-version-file: services/svc/go.mod",
+			"cache-dependency-path: services/svc/go.sum",
+			"spec=services/svc/openapi.yml",
+		}},
 		{"go-cli", []string{"go-version-file: services/svc/go.mod", "cache-dependency-path: services/svc/go.sum"}},
-		{"node-service", []string{"cache-dependency-path: services/svc/package-lock.json"}},
+		// node-service points at the REPOSITORY root, not its own
+		// directory: the services are npm workspaces, so there is one
+		// lockfile for all of them. Installing per-service links a
+		// sibling's generated client without installing what that client
+		// depends on, which fails at the first import.
+		{"node-service", []string{"cache-dependency-path: package-lock.json", "working-directory: ."}},
 	} {
 		r, err := Get(tc.runtime)
 		if err != nil {
