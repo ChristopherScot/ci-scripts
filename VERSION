@@ -1,3 +1,3 @@
-v1.1.8
+v1.1.9
 
-v1.1.8 monorepos work end to end: init creates them, CI is scoped, clients publish
+v1.1.9 Argo reads each service from its own repo; render --register opens the PR
