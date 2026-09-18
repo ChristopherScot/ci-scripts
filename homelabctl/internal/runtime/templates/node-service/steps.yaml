@@ -9,15 +9,6 @@
           cache: npm
           cache-dependency-path: {{ .ServiceDir }}/package-lock.json
 
-      # In this service's own directory, from its own lockfile.
-      #
-      # A service consuming a sibling's generated TypeScript client
-      # resolves it from npm like any other dependency, so there is
-      # nothing to hoist and no workspace to install from. That was not
-      # always true: before the client was published the only way to
-      # resolve it was an npm workspace, which links the sibling by
-      # SYMLINK - fine in CI, fatal in the image, where the link dangles
-      # and node exits with ERR_MODULE_NOT_FOUND.
       - name: Install
         run: npm ci
 
@@ -37,3 +28,30 @@
 
       - name: Test
         run: npm test
+
+      # Build the bundle AND run it.
+      #
+      # Locally this service runs `node server.ts`; the image runs a Vite
+      # bundle. Those are two paths, and a bundler that drops something -
+      # a dynamic import, a package whose ESM entry differs from its
+      # CommonJS one - produces an artifact that only fails in
+      # production. Building proves it compiles; starting it and getting
+      # a 200 proves it runs.
+      - name: Build the production bundle
+        run: npm run build
+
+      - name: Smoke-test the bundle
+        run: |
+          PORT=8099 npm run start:dist &
+          pid=$!
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 2 http://127.0.0.1:8099/healthz >/dev/null 2>&1; then
+              echo "the bundle serves /healthz"
+              kill $pid
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::the bundle did not answer /healthz within 20s"
+          kill $pid 2>/dev/null || true
+          exit 1

@@ -114,10 +114,16 @@ func init() {
 		files: map[string]tmpl{
 			"package.json.tmpl":   {dst: "package.json"},
 			"tsconfig.json.tmpl":  {dst: "tsconfig.json"},
+			"vite.config.ts.tmpl": {dst: "vite.config.ts"},
 			"server.ts.tmpl":      {dst: "server.ts"},
 			"server.test.ts.tmpl": {dst: "server.test.ts"},
 			"gitignore":           {dst: ".gitignore"},
-			"dockerignore":        {dst: ".dockerignore"},
+			// Dockerfile.dockerignore, not .dockerignore: this runtime
+			// builds from the REPOSITORY root so a sibling client is in
+			// scope, and Docker reads a plain .dockerignore only from
+			// the context root. Beside the Dockerfile it would be
+			// silently ignored and the whole repo sent to the daemon.
+			"dockerignore": {dst: "Dockerfile.dockerignore"},
 		},
 	})
 }

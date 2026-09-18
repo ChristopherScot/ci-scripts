@@ -66,7 +66,11 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: {{ .Context }}
+          # The REPOSITORY root, so a `file:` dependency on a generated
+          # client in a sibling directory is inside the context. The
+          # Dockerfile changes into this service's directory itself.
+          context: {{ .RootContext }}
+          file: {{ .Dockerfile }}
           # Stamps the commit into the image so log lines name their build.
           build-args: |
             VERSION=${{ "{{" }} github.sha {{ "}}" }}

@@ -1,30 +1,40 @@
-# Two stages so the shipped image has no npm, no shell and no build tools:
-# the builder installs dependencies, the runtime carries only node plus
-# what was installed. Matches the go-service template, which ships
-# distroless for the same reason.
+# Two stages so the shipped image has no npm, no shell and no build
+# tools. Matches the go-service template, which ships distroless for the
+# same reason.
 #
-# distroless/nodejs22-debian12:nonroot already runs as uid 65532 - the uid
-# the generated securityContext expects - so there is no adduser step to
-# drift out of sync, and ca-certificates are included for outbound HTTPS.
+# distroless/nodejs24-debian12:nonroot already runs as uid 65532 - the
+# uid the generated securityContext expects - so there is no adduser step
+# to drift out of sync, and ca-certificates are included for outbound
+# HTTPS.
 #
 # Neither stage is pinned by digest. A floating tag means a base change
 # lands on the next build rather than when you choose it; pin both FROMs
 # to a digest if that matters more than picking up patch releases.
 FROM node:24-alpine AS build
 
-WORKDIR /app
+WORKDIR /repo
 
-# Manifests before source, so editing a handler does not bust the
-# install cache.
-COPY package*.json ./
-# `npm ci` needs package-lock.json, which `homelabctl init` generates and
-# CI regenerates. --omit=dev keeps devDependencies out of the image.
+# The REPOSITORY root is the build context, not this service's directory.
 #
-# mkdir -p guards the case where every dependency is a devDependency:
-# npm then installs nothing, creates no node_modules, and the COPY below
-# fails - making the service unbuildable for a reason that reads as a
-# missing file rather than an empty install.
-RUN npm ci --omit=dev && mkdir -p node_modules
+# That is what lets a service depend on a generated client in a sibling
+# directory - `file:../<api>/clients/ts` - which is what makes extending
+# the API and using the extension a single commit rather than two PRs
+# with a publish in between. A context of this directory alone could not
+# see the sibling at all.
+COPY . .
+
+WORKDIR /repo/{{ .ServiceDir }}
+
+# Dev dependencies included, unlike a plain runtime install: the bundler
+# and the TypeScript compiler are both devDependencies, and neither ends
+# up in the image.
+RUN npm ci
+
+# One file out. Vite inlines every dependency (ssr.noExternal), so the
+# runtime stage needs no node_modules at all - which is also why the
+# sibling client's symlink never reaches the container, the thing that
+# broke when this used an npm workspace.
+RUN npm run build
 
 FROM gcr.io/distroless/nodejs24-debian12:nonroot
 
@@ -34,13 +44,11 @@ ARG VERSION=dev
 ENV VERSION=$VERSION
 
 WORKDIR /app
-COPY --from=build --chown=65532:65532 /app/node_modules ./node_modules
-COPY --chown=65532:65532 . .
+# Just the bundle. No node_modules, no source, no package.json - there is
+# nothing else the process needs.
+COPY --from=build --chown=65532:65532 /repo/{{ .ServiceDir }}/dist/server.js ./
 
 USER 65532:65532
 EXPOSE {{ .Port }}
 # The distroless nodejs image's entrypoint is already `node`.
-# server.ts, not a compiled artifact: Node strips the types at load time,
-# so the image ships the source it was written in and there is no build
-# stage to keep in sync.
-CMD ["server.ts"]
+CMD ["server.js"]

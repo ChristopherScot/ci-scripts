@@ -5,12 +5,18 @@
   "type": "module",
   "scripts": {
     "start": "node server.ts",
+    "build": "vite build",
+    "start:dist": "node dist/server.js",
+    "dev": "concurrently -n vite,node -c cyan,green \"vite build --watch\" \"node --watch dist/server.js\"",
+    "dev:fast": "node --watch server.ts",
     "test": "node --test",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
+    "concurrently": "^9.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0"
   },
   "dependencies": {
     "fastify": "^5.12.5",

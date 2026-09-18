@@ -127,6 +127,30 @@ func (p Params) RepoName() string {
 	return p.Name
 }
 
+// RootContext builds from the repository root whatever the layout.
+//
+// Always ".", and named rather than written as a bare dot so the
+// templates that need it say why: a service whose build inputs live
+// outside its own directory - node-service, which depends on a
+// generated client in a sibling via `file:` - needs a context that can
+// see them, and a context never includes its parent.
+func (p Params) RootContext() string {
+	return "."
+}
+
+// Dockerfile is the path to the Dockerfile RELATIVE TO RootContext.
+//
+// build-push-action resolves `file:` against the context rather than the
+// repository, so a root context has to name the service directory; with
+// a context of "." and no `file:`, Docker looks for ./Dockerfile and a
+// monorepo has none.
+func (p Params) Dockerfile() string {
+	if p.PathFilter != "" {
+		return p.PathFilter + "/Dockerfile"
+	}
+	return "Dockerfile"
+}
+
 // ServiceDir is where this service's files live relative to the
 // repository ROOT: its directory in a monorepo, "." otherwise.
 //

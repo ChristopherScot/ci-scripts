@@ -137,8 +137,16 @@ async function start(): Promise<void> {
   }
 }
 
-// Importing this file from a test must not start a server. argv[1] is the
-// entrypoint Node was given, so this is false under the test runner.
-if (process.argv[1]?.endsWith('server.ts')) {
+// Importing this file from a test must not start a server. argv[1] is
+// the entrypoint Node was given, so this is false under the test runner.
+//
+// Both extensions, because there are two of them: `node server.ts`
+// locally and `node server.js` in the image, where Vite has bundled
+// this file. Checking only the source extension makes the bundle start
+// nothing, exit 0, and log absolutely nothing - which looks like a
+// container that ran and stopped rather than a guard that did not
+// match.
+const entry = process.argv[1] ?? ''
+if (entry.endsWith('server.ts') || entry.endsWith('server.js')) {
   await start()
 }

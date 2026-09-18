@@ -1261,58 +1261,54 @@ func TestRegenRewritesOnlyGeneratedFiles(t *testing.T) {
 	}
 }
 
-// CI and the image build must agree on where a node service's lockfile
-// is, because when they disagree the failure is remote from its cause.
+// A node service builds from the REPOSITORY root.
 //
-// They did once: the workflow installed from a workspace lockfile at the
-// repository root while the image still built with the SERVICE directory
-// as its context, so `COPY package*.json ./` matched nothing and the
-// build died with npm's EUSAGE - "can only install with an existing
-// package-lock.json" - about a lockfile sitting one level up, outside
-// the context.
+// That is what lets it depend on a generated client in a sibling
+// directory - `file:../<api>/clients/ts` - which is what makes extending
+// an API and using the extension one commit rather than two PRs with a
+// publish in between. A context of the service's own directory cannot
+// see the sibling at all.
 //
-// One lockfile, beside the service, used by both.
-func TestNodeServiceLockfileIsWhereBothCIAndDockerLookForIt(t *testing.T) {
-	for _, tc := range []struct{ pathFilter, wantCache, wantContext string }{
-		{"", "./package-lock.json", "context: ."},
-		{"services/svc", "services/svc/package-lock.json", "context: services/svc"},
+// It is also why the image is a bundle: Vite inlines the dependencies,
+// so the runtime stage needs no node_modules and the sibling's symlink
+// never has to survive into the container. That is the thing that broke
+// when this used an npm workspace.
+func TestNodeServiceBuildsFromTheRepoRoot(t *testing.T) {
+	r, err := Get("node-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ pathFilter, wantFile string }{
+		{"", "file: Dockerfile"},
+		{"services/svc", "file: services/svc/Dockerfile"},
 	} {
-		r, err := Get("node-service")
-		if err != nil {
-			t.Fatal(err)
-		}
 		p := testParams()
 		p.PathFilter = tc.pathFilter
 		a := r.Artifacts(p)
 
-		// setup-node resolves cache-dependency-path from the repository
-		// root, so it has to name the service directory explicitly.
-		if !strings.Contains(a.Workflow, "cache-dependency-path: "+tc.wantCache) {
-			t.Errorf("PathFilter %q: workflow missing cache path %q", tc.pathFilter, tc.wantCache)
+		// A root context with an explicit file:, since Docker resolves
+		// file: against the context and a monorepo has no ./Dockerfile.
+		if !strings.Contains(a.Workflow, "context: .") {
+			t.Errorf("PathFilter %q: build context is not the repo root", tc.pathFilter)
 		}
-		// The build context is the service directory, which is what puts
-		// its package-lock.json inside the context for `npm ci`.
-		if !strings.Contains(a.Workflow, tc.wantContext) {
-			t.Errorf("PathFilter %q: workflow missing %q", tc.pathFilter, tc.wantContext)
-		}
-		// Installed in the service directory, not hoisted to a workspace
-		// root: a published client is an ordinary dependency, and a
-		// workspace would link a sibling by symlink that dangles in the
-		// runtime image.
-		if strings.Contains(a.Workflow, "working-directory: .\n        run: npm ci") {
-			t.Errorf("PathFilter %q: npm ci still installs from a workspace root", tc.pathFilter)
+		if !strings.Contains(a.Workflow, tc.wantFile) {
+			t.Errorf("PathFilter %q: workflow missing %q", tc.pathFilter, tc.wantFile)
 		}
 
-		// A plain .dockerignore is read from the context root, which the
-		// service directory is.
+		// Docker reads a plain .dockerignore only from the context root,
+		// so a per-service one has to use the Dockerfile-specific name
+		// to be read at all.
 		var found bool
 		for _, f := range a.Files {
-			if f.Path == ".dockerignore" {
+			if f.Path == "Dockerfile.dockerignore" {
 				found = true
+			}
+			if f.Path == ".dockerignore" {
+				t.Errorf("PathFilter %q: a plain .dockerignore is never read from a root context", tc.pathFilter)
 			}
 		}
 		if !found {
-			t.Errorf("PathFilter %q: no .dockerignore", tc.pathFilter)
+			t.Errorf("PathFilter %q: no Dockerfile.dockerignore", tc.pathFilter)
 		}
 	}
 }
@@ -1593,13 +1589,36 @@ func TestNodeServiceIsTypeScriptWithNoBuildStep(t *testing.T) {
 	if !strings.Contains(files["tsconfig.json"], `"noEmit": true`) {
 		t.Error("tsconfig emits output; the point is that Node runs the source")
 	}
-	if !strings.Contains(a.Dockerfile, `CMD ["server.ts"]`) {
-		t.Error("the image does not start server.ts")
+	// Locally the service runs the TypeScript directly - no build step
+	// in the edit-run loop.
+	if !strings.Contains(files["package.json"], `"start": "node server.ts"`) {
+		t.Error("start does not run the TypeScript source")
 	}
-	for _, unwanted := range []string{"tsc --build", "npm run build", "dist/"} {
-		if strings.Contains(a.Dockerfile, unwanted) {
-			t.Errorf("Dockerfile has a build step: %q", unwanted)
+	// Two dev loops, deliberately. `dev` runs the same Vite pipeline
+	// the image is built from, so a bundling problem surfaces while you
+	// are editing rather than in CI; `dev:fast` skips the bundler for a
+	// tighter loop when that does not matter.
+	for _, want := range []string{`"dev":`, `"dev:fast": "node --watch server.ts"`} {
+		if !strings.Contains(files["package.json"], want) {
+			t.Errorf("package.json missing %s", want)
 		}
+	}
+	if !strings.Contains(files["package.json"], "vite build --watch") {
+		t.Error("the default dev loop does not go through Vite, so it does not match what ships")
+	}
+	// concurrently, not `&`: a backgrounded process survives Ctrl-C and
+	// leaves an orphaned watcher holding the output directory.
+	if !strings.Contains(files["package.json"], "concurrently") {
+		t.Error("dev backgrounds a process without a supervisor to kill it")
+	}
+
+	// The IMAGE runs a bundle, which is what lets it carry no
+	// node_modules and therefore depend on a sibling by path.
+	if !strings.Contains(a.Dockerfile, `CMD ["server.js"]`) {
+		t.Error("the image does not start the bundle")
+	}
+	if strings.Contains(a.Dockerfile, "node_modules ./node_modules") {
+		t.Error("the image still copies node_modules; the bundle should make that unnecessary")
 	}
 
 	// Type stripping erases rather than compiles, so syntax needing code
@@ -1614,5 +1633,34 @@ func TestNodeServiceIsTypeScriptWithNoBuildStep(t *testing.T) {
 	}
 	if !strings.Contains(a.Workflow, "npm run typecheck") {
 		t.Error("CI does not typecheck")
+	}
+}
+
+// The startup guard has to match BOTH entrypoints.
+//
+// A service runs as server.ts locally and as the bundled server.js in
+// the image, and the guard that stops a test import from starting a
+// listener keys on argv[1]. Checking only the source extension makes
+// the bundle start nothing, exit 0 and log nothing at all - a container
+// that looks like it ran and stopped rather than a guard that did not
+// match. It cost a debugging session the first time.
+func TestStartupGuardMatchesBothEntrypoints(t *testing.T) {
+	r, err := Get("node-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var server string
+	for _, f := range r.Artifacts(testParams()).Files {
+		if f.Path == "server.ts" {
+			server = f.Body
+		}
+	}
+	if server == "" {
+		t.Fatal("no server.ts")
+	}
+	for _, want := range []string{"server.ts", "server.js"} {
+		if !strings.Contains(server, "endsWith('"+want+"')") {
+			t.Errorf("the startup guard does not match %s; that entrypoint would start nothing", want)
+		}
 	}
 }

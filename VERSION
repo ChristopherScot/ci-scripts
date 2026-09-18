@@ -1,4 +1,6 @@
-v1.2.0
+v1.3.0
+
+v1.3.0 vite bundles the image; hot reload for services
 
 v1.2.0 node-service is TypeScript, run directly with no build step
 

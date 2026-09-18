@@ -49,11 +49,23 @@ without the defaults would be worse than useless.
 
 ```sh
 go test ./...                    # server, client and paging
-go run .                         # PORT=3000 by default
+go run .                         # PORT={{ .Port }} by default
+wgo run .                        # the same, restarted on every save
 homelabctl regen                 # after editing openapi.yml
 homelabctl check deploy          # deploy manifests and spec problems
 homelabctl diff                  # what would change in the GitOps repo
 ```
+
+`wgo` is `go run` with a file watcher, and needs installing once:
+
+```sh
+go install github.com/bokwoon95/wgo@latest
+```
+
+Chosen over air, the more popular option, because it needs no config
+file, creates no `tmp/` directory to gitignore, and prints your
+program's output rather than its own banner. `wgo run .` behaves exactly
+like `go run .`, which is the whole feature.
 
 Bump `info.version` in `openapi.yml` when the API changes, then
 `homelabctl regen` — it syncs the version the clients report. CI releases
@@ -62,7 +74,7 @@ client's version, and publishes the TypeScript client to npm.
 
 ```sh
 go get github.com/{{ .Owner }}/{{ .Name }}@v0.2.0
-npm install @{{ .Owner }}/{{ .Name }}-client@0.2.0
+npm install @{{ .NPMScope }}/{{ .Name }}-client@0.2.0
 ```
 
 Go needs no registry — a tag on this repo is a module version. npm has no
@@ -71,11 +83,21 @@ repository root, which is not where a service in a monorepo lives, so the
 client is published instead.
 
 Publishing uses npm trusted publishing (OIDC), so there is no token in
-this repo's secrets. It needs a one-time setup on npmjs.com — Packages →
-`@{{ .Owner }}/{{ .Name }}-client` → Settings → Trusted publishing —
-naming this repository and its workflow file. Until that exists the
-publish step fails, which is deliberate: a Go tag whose TypeScript
-counterpart silently never shipped is worse than a red build.
+this repo's secrets. It needs a one-time setup per package, once:
+
+```sh
+npm trust github @{{ .NPMScope }}/{{ .Name }}-client \
+  --file publish.yaml --repo {{ .Owner }}/{{ .RepoName }} --allow-publish
+```
+
+Note the casing: npm rejects an uppercase scope, and the repository must
+match GitHub's spelling exactly, because npm compares it against the
+OIDC claim literally. A mismatch fails with a 404 naming the package,
+which points nowhere near the owner.
+
+Until that exists the publish step fails, which is deliberate: a Go tag
+whose TypeScript counterpart silently never shipped is worse than a red
+build.
 
 ## Calling this service
 
