@@ -16,6 +16,21 @@ import (
 // refuses to generate from a broken one, with a better error than this
 // could produce. These are the things that generate FINE and still cost
 // you something.
+// operation is the part of an OpenAPI operation this check reads.
+type operation struct {
+	OperationID string                    `yaml:"operationId"`
+	Summary     string                    `yaml:"summary"`
+	Responses   map[string]map[string]any `yaml:"responses"`
+}
+
+// httpMethods are the keys in a path item that describe an operation.
+// The others - parameters, summary, description, servers, $ref - are
+// part of the path, not of any one method.
+var httpMethods = map[string]bool{
+	"get": true, "put": true, "post": true, "delete": true,
+	"options": true, "head": true, "patch": true, "trace": true,
+}
+
 func checkSpec(dir string, add func(string, ...any)) {
 	path := filepath.Join(dir, "openapi.yml")
 	b, err := os.ReadFile(path)
@@ -31,11 +46,13 @@ func checkSpec(dir string, add func(string, ...any)) {
 		Info struct {
 			Version string `yaml:"version"`
 		} `yaml:"info"`
-		Paths map[string]map[string]struct {
-			OperationID string                    `yaml:"operationId"`
-			Summary     string                    `yaml:"summary"`
-			Responses   map[string]map[string]any `yaml:"responses"`
-		} `yaml:"paths"`
+		// map[string]yaml.Node, not map[string]operation: a path item
+		// holds more than operations. OpenAPI allows `parameters`,
+		// `summary`, `description` and `$ref` beside the methods, and
+		// `parameters` is a LIST - decoding it as an operation struct
+		// fails the whole file with "cannot unmarshal !!seq", which is
+		// what a shared path parameter used to do here.
+		Paths map[string]map[string]yaml.Node `yaml:"paths"`
 	}
 	if err := yaml.Unmarshal(b, &spec); err != nil {
 		add("%s is not valid YAML: %v", path, err)
@@ -48,8 +65,18 @@ func checkSpec(dir string, add func(string, ...any)) {
 	checkClientVersion(dir, spec.Info.Version, add)
 
 	seen := map[string]string{}
-	for route, methods := range spec.Paths {
-		for method, op := range methods {
+	for route, item := range spec.Paths {
+		for method, node := range item {
+			// Only the HTTP methods are operations. Everything else in a
+			// path item is legitimate and not ours to check.
+			if !httpMethods[method] {
+				continue
+			}
+			var op operation
+			if err := node.Decode(&op); err != nil {
+				add("%s %s: %v", strings.ToUpper(method), route, err)
+				continue
+			}
 			where := fmt.Sprintf("%s %s", strings.ToUpper(method), route)
 
 			// Without an operationId ogen invents a name from the path,
