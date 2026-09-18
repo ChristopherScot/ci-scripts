@@ -148,7 +148,12 @@ jobs:
           # idempotent: a green build after a red one recovers the
           # release on its own, and a push that changes nothing is a
           # no-op because the tag is already there.
-          if git rev-parse "v$version" >/dev/null 2>&1; then
+          # Against the REMOTE, not the local clone. actions/checkout
+          # does not fetch tags, so `git rev-parse` here knows about
+          # none of them and happily re-tags a version that is already
+          # released - the push then fails with "already exists" and
+          # turns a clean no-op into a red build.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
             echo "v$version already tagged; nothing to do"
             exit 0
           fi

@@ -1,4 +1,6 @@
-v1.3.2
+v1.3.3
+
+v1.3.3 the tag check asks the remote, since checkout does not fetch tags
 
 v1.3.2 spec tagging is idempotent, so a failed build no longer skips a release
 
