@@ -476,11 +476,52 @@ spec:
 	return b.String()
 }
 
+// ingress renders one or two Ingress resources: one for the names that
+// have a certificate, one for the names that cannot have one.
+//
+// They must be separate resources because ssl-redirect is a
+// RESOURCE-scoped annotation, not a per-host one. Put a plain-HTTP name
+// in the same Ingress as a certified one and there is no correct
+// setting: leave the redirect on and the plain name 308s to a
+// certificate that does not cover it; turn it off and the certified name
+// stops being redirected too. Three services in this cluster were
+// merged, and two of them served their admin UI over plain HTTP as a
+// result.
+//
+// The plain resource deliberately carries no cluster-issuer annotation.
+// That is what makes an impossible ACME order structurally impossible
+// rather than merely avoided - cert-manager never looks at it.
 func ingress(c *config.Config) string {
 	class := "external"
 	if c.Ingress.Public {
 		class = "public"
 	}
+
+	var certified, plain []config.IngressHost
+	for _, h := range c.Ingress.Hosts {
+		if h.TLS {
+			certified = append(certified, h)
+		} else {
+			plain = append(plain, h)
+		}
+	}
+
+	var b strings.Builder
+	if len(certified) > 0 {
+		b.WriteString(ingressDoc(c, class, c.Name, certified, true))
+	}
+	if len(plain) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("---\n")
+		}
+		b.WriteString(ingressDoc(c, class, c.Name+"-lan", plain, false))
+	}
+	return b.String()
+}
+
+// ingressDoc renders one Ingress. tls decides whether it gets a
+// certificate and the annotations that go with one.
+func ingressDoc(c *config.Config, class, name string, hosts []config.IngressHost, tls bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -488,20 +529,32 @@ metadata:
   name: %s
   namespace: %s
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-`, c.Name, c.Namespace)
+`, name, c.Namespace)
+	if tls {
+		b.WriteString("    cert-manager.io/cluster-issuer: letsencrypt-prod\n")
+	} else {
+		// These names have no certificate, so a redirect to https sends
+		// the browser to one that cannot match. Confined to this
+		// resource, so the certified names keep their redirect.
+		b.WriteString("    nginx.ingress.kubernetes.io/ssl-redirect: \"false\"\n")
+	}
 	if c.Ingress.Authelia {
 		b.WriteString(`    nginx.ingress.kubernetes.io/auth-url: "http://authelia.authelia.svc.cluster.local/api/verify"
     nginx.ingress.kubernetes.io/auth-signin: "https://auth.home.chrisscotmartin.com/?rd=$scheme://$host$escaped_request_uri"
 `)
 	}
-	fmt.Fprintf(&b, `spec:
-  ingressClassName: %s
-  tls:
-    - hosts: [%s]
-      secretName: %s-tls
-  rules:
-    - host: %s
+	fmt.Fprintf(&b, "spec:\n  ingressClassName: %s\n", class)
+	if tls {
+		names := make([]string, len(hosts))
+		for i, h := range hosts {
+			names[i] = h.Name
+		}
+		fmt.Fprintf(&b, "  tls:\n    - hosts: [%s]\n      secretName: %s-tls\n",
+			strings.Join(names, ", "), c.Name)
+	}
+	b.WriteString("  rules:\n")
+	for _, h := range hosts {
+		fmt.Fprintf(&b, `    - host: %s
       http:
         paths:
           - path: /
@@ -511,7 +564,8 @@ metadata:
                 name: %s
                 port:
                   number: 80
-`, class, c.Ingress.Host, c.Name, c.Ingress.Host, c.Name)
+`, h.Name, c.Name)
+	}
 	return b.String()
 }
 

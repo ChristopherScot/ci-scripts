@@ -24,7 +24,7 @@ func TestValidateReportsAllProblemsAtOnce(t *testing.T) {
 // tries it from cellular.
 func TestPublicIngressRejectsAuthelia(t *testing.T) {
 	c := &Config{Name: "a", Team: "t", Runtime: "go-service",
-		Ingress: &Ingress{Host: "h.example.com", Public: true, Authelia: true}}
+		Ingress: &Ingress{Hosts: IngressHosts("h.example.com"), Public: true, Authelia: true}}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "authelia") {
 		t.Errorf("Validate() = %v, want an authelia/public conflict", err)
 	}
@@ -59,7 +59,7 @@ func TestCronJobValidation(t *testing.T) {
 		{"schedule required", func(c *Config) { c.Kind = KindCronJob }, "schedule is required"},
 		{"no ingress", func(c *Config) {
 			c.Kind, c.Schedule = KindCronJob, "* * * * *"
-			c.Ingress = &Ingress{Host: "h.example.com"}
+			c.Ingress = &Ingress{Hosts: IngressHosts("h.example.com")}
 		}, "cannot have an ingress"},
 		{"schedule needs cronjob", func(c *Config) { c.Schedule = "* * * * *" }, "only meaningful for kind: cronjob"},
 		{"unknown kind", func(c *Config) { c.Kind = "daemonset" }, "not one of"},
@@ -170,7 +170,7 @@ func TestTypoIsRejected(t *testing.T) {
 // when the author asked for a public one.
 func TestNestedTypoIsRejected(t *testing.T) {
 	_, err := loadYAMLErr(t, "name: a\nteam: t\nruntime: go-service\n"+
-		"ingress:\n  host: h.example.com\n  publik: true\n")
+		"ingress:\n  hosts: [h.example.com]\n  publik: true\n")
 	if err == nil {
 		t.Fatal("`ingress.publik` was accepted; the ingress would not be public")
 	}

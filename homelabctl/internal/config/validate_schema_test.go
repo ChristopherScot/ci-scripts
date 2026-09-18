@@ -24,7 +24,7 @@ func TestSchemaConstraintsAreEnforced(t *testing.T) {
 		{"port below minimum", base + "port: 0\n", "port"},
 		{"name is not a DNS label", "name: With-Caps\nteam: t\nruntime: go-service\n", "name"},
 		{"unknown top-level key", base + "bogus: 1\n", "bogus"},
-		{"unknown nested key", base + "ingress:\n  host: h.example.com\n  publik: true\n", "publik"},
+		{"unknown nested key", base + "ingress:\n  hosts: [h.example.com]\n  publik: true\n", "publik"},
 		{"kind outside the enum", base + "kind: daemonset\n", "kind"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,7 +69,7 @@ func TestSchemaReportsEveryProblemAtOnce(t *testing.T) {
 // they must still fire after schema validation passes.
 func TestSemanticRulesStillApply(t *testing.T) {
 	_, err := loadYAMLErr(t, "name: a\nteam: t\nruntime: go-service\n"+
-		"ingress:\n  host: h.example.com\n  public: true\n  authelia: true\n")
+		"ingress:\n  hosts: [h.example.com]\n  public: true\n  authelia: true\n")
 	if err == nil || !strings.Contains(err.Error(), "authelia") {
 		t.Errorf("Load() = %v, want the authelia/public conflict", err)
 	}

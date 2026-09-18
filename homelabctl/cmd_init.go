@@ -246,7 +246,10 @@ func buildConfig(o initOpts) (*config.Config, error) {
 	c.Image = config.Image{Repository: image}
 	c.Spec = !o.noSpec
 	if o.host != "" {
-		c.Ingress = &config.Ingress{Host: o.host, Public: o.public}
+		c.Ingress = &config.Ingress{
+			Hosts:  []config.IngressHost{{Name: o.host, TLS: config.Certifiable(o.host)}},
+			Public: o.public,
+		}
 	}
 	return c, c.Complete()
 }
@@ -283,7 +286,7 @@ func confirm(o initOpts, c *config.Config, isCLI bool) error {
 		if c.Ingress.Public {
 			class = "public (internet)"
 		}
-		fmt.Printf("  ingress %s via %s\n", c.Ingress.Host, class)
+		fmt.Printf("  ingress %s via %s\n", c.Ingress.Hosts[0].Name, class)
 	}
 	if o.private {
 		// Worth saying out loud: a private package makes image automation

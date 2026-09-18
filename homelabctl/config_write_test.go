@@ -22,7 +22,7 @@ func TestConfigYAMLRoundTrips(t *testing.T) {
 	c.Image = config.Image{Repository: "ghcr.io/o/svc"}
 	c.Env = map[string]string{"LOG_LEVEL": "debug"}
 	c.Secrets = &config.Secrets{VaultPath: "svc", Keys: []config.SecretKey{{Env: "TOKEN", Property: "api-key"}}}
-	c.Ingress = &config.Ingress{Host: "svc.example.com", Authelia: true}
+	c.Ingress = &config.Ingress{Hosts: config.IngressHosts("svc.example.com", "svc.lab"), Authelia: true}
 	c.Probes = &config.Probes{Path: "/health"}
 	c.Resources = &config.Resources{CPURequest: "50m", MemoryRequest: "64Mi", MemoryLimit: "128Mi"}
 	c.Patches = map[string]string{"Deployment": "spec: {}"}

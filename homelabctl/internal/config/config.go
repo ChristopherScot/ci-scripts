@@ -189,8 +189,120 @@ func (k *SecretKey) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// IngressHost is one hostname this service answers on.
+//
+// It decodes from either form:
+//
+//	hosts:
+//	  - argo.home.chrisscotmartin.com   # certified, HTTPS
+//	  - argo.lab                        # no cert, plain HTTP
+//	  - name: internal.example.com      # looks certifiable, deliberately not
+//	    tls: false
+//
+// The bare form derives TLS from the name, because for a public CA the
+// answer is not a preference: it will not issue for a single-label name
+// like `go`, or for a private suffix like .lab. Asking the author to
+// state it invites `tls: true` on a name no CA will ever sign, which
+// fails as a cert-manager order that retries forever while the manifests
+// apply cleanly and Argo reports Synced.
+//
+// The mapping form exists for the one case derivation cannot see: a name
+// that LOOKS certifiable but is not reachable for a challenge, or that
+// you simply do not want a certificate for.
+type IngressHost struct {
+	Name string
+	TLS  bool
+}
+
+// UnmarshalYAML accepts a bare hostname or a {name, tls} mapping.
+func (h *IngressHost) UnmarshalYAML(value *yaml.Node) error {
+	var name string
+	if err := value.Decode(&name); err == nil {
+		h.Name, h.TLS = name, Certifiable(name)
+		return nil
+	}
+	var m struct {
+		Name string `yaml:"name"`
+		TLS  *bool  `yaml:"tls"`
+	}
+	if err := value.Decode(&m); err != nil {
+		return fmt.Errorf("an ingress host must be a name, or a mapping of name and tls")
+	}
+	if m.Name == "" {
+		return fmt.Errorf("an ingress host mapping needs a name")
+	}
+	h.Name = m.Name
+	h.TLS = Certifiable(m.Name)
+	if m.TLS != nil {
+		h.TLS = *m.TLS
+	}
+	return nil
+}
+
+// MarshalYAML writes back the form the host came from, so a file this
+// tool writes is a file it can read.
+func (h IngressHost) MarshalYAML() (any, error) {
+	if h.TLS == Certifiable(h.Name) {
+		return h.Name, nil
+	}
+	return map[string]any{"name": h.Name, "tls": h.TLS}, nil
+}
+
+// IngressHosts builds hosts the conventional way, deriving TLS from each
+// name, for a Config assembled in Go code rather than decoded from YAML.
+func IngressHosts(names ...string) []IngressHost {
+	out := make([]IngressHost, 0, len(names))
+	for _, n := range names {
+		out = append(out, IngressHost{Name: n, TLS: Certifiable(n)})
+	}
+	return out
+}
+
+// Certifiable reports whether a public CA could issue for this name.
+//
+// It answers a question about the NAME, not about this cluster or this
+// domain: there is deliberately no allowlist of domains here, so any
+// real domain - yours, a customer's, one bought tomorrow - is treated as
+// certifiable without the tool being told about it.
+//
+// Two things make a name impossible to certify, and both are standards,
+// not local convention:
+//
+//   - a single label (`go`) is not a domain; the CA/Browser Forum
+//     baseline requirements forbid issuing for one.
+//   - a reserved or private-use TLD. These are the RFC 6761 special-use
+//     names (.test, .example, .invalid, .localhost), .local from RFC 6762
+//     mDNS, and .internal, which ICANN reserved for private use in 2024.
+//     No CA can validate control of any of them.
+//
+// .lab is here as the one local convention, because this cluster uses it
+// for short LAN names. It is not a reserved TLD - it is simply not
+// delegated, so a challenge cannot reach it.
+//
+// A name that passes here can still fail to get a certificate, if the
+// ACME challenge cannot reach it - a split-horizon DNS name, say. That
+// is what `tls: false` on a host is for. This only has to be right about
+// names that can NEVER work, so the list stays short and justifiable
+// rather than trying to predict reachability.
+func Certifiable(host string) bool {
+	i := strings.LastIndex(host, ".")
+	if i < 0 {
+		return false // a single label is not a domain
+	}
+	switch strings.ToLower(host[i+1:]) {
+	case "test", "example", "invalid", "localhost", // RFC 6761
+		"local",    // RFC 6762, mDNS
+		"internal", // ICANN-reserved for private use, 2024
+		"lab":      // this cluster's short-name convention; undelegated
+		return false
+	}
+	return true
+}
+
 type Ingress struct {
-	Host string `yaml:"host"`
+	// Hosts are the names this service answers on. The first certifiable
+	// one names the TLS secret, so reordering does not reissue a cert.
+	Hosts []IngressHost `yaml:"hosts"`
 	// Public routes via the internet-facing controller; otherwise LAN-only.
 	Public bool `yaml:"public,omitempty"`
 	// Authelia puts forward-auth in front. Not available for public hosts
@@ -418,8 +530,36 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.Ingress != nil {
-		if c.Ingress.Host == "" {
-			add("ingress.host is required when ingress is set")
+		if len(c.Ingress.Hosts) == 0 {
+			add("ingress.hosts must list at least one hostname")
+		}
+		seen := map[string]bool{}
+		certified := 0
+		for i, h := range c.Ingress.Hosts {
+			switch {
+			case h.Name == "":
+				add("ingress.hosts[%d] has no name", i)
+			case seen[h.Name]:
+				add("ingress.hosts lists %q twice", h.Name)
+			}
+			seen[h.Name] = true
+			if h.TLS {
+				certified++
+			}
+			// The one combination that is not a preference but a
+			// mistake. cert-manager would accept it and retry an order no
+			// CA can ever complete, while the manifests apply cleanly and
+			// Argo reports Synced - and a stuck order burns Let's
+			// Encrypt rate limits for the whole registered domain, which
+			// breaks renewals for unrelated services.
+			if h.TLS && !Certifiable(h.Name) {
+				add("ingress.hosts[%d]: %q asks for tls, but no public CA will issue for it - "+
+					"a single-label name or a private suffix cannot be validated", i, h.Name)
+			}
+		}
+		if len(c.Ingress.Hosts) > 0 && certified == 0 {
+			add("ingress.hosts has no name that can get a certificate, so the service would be plain HTTP only; " +
+				"add an externally-resolvable hostname, or drop the ingress")
 		}
 		// Authelia is LAN-only; pairing it with a public host produces an
 		// endpoint that dead-ends off-network, which is invisible until

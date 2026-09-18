@@ -111,20 +111,31 @@ const Schema = `{
     },
     "ingress": {
       "type": "object",
-      "required": ["host"],
+      "required": ["hosts"],
       "additionalProperties": false,
       "properties": {
-        "host": { "type": "string" },
-        "public": {
-          "type": "boolean",
-          "default": false,
-          "description": "Route via the internet-facing controller rather than LAN-only."
+        "hosts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Hostnames this service answers on. A bare name derives TLS from the name itself: a single label or a private suffix (.lab, .local, .internal) cannot be certified by a public CA. Use a name/tls mapping only when that derivation is wrong.",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "required": ["name"],
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "type": "string" },
+                  "tls": { "type": "boolean" }
+                }
+              }
+            ]
+          }
         },
-        "authelia": {
-          "type": "boolean",
-          "default": false,
-          "description": "Forward-auth. Cannot be combined with public: the auth host resolves on the LAN only."
-        }
+        "public": { "type": "boolean", "description": "Route via the internet-facing controller instead of the LAN one." },
+        "authelia": { "type": "boolean", "description": "Put Authelia forward-auth in front. LAN-only; cannot be combined with public." }
       }
     },
     "probes": {
