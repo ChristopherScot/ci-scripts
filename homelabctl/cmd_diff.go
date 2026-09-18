@@ -14,17 +14,29 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// diff closes the one gap in the workflow that had no review step: what
-// this tool renders is copied into the GitOps repo by hand, so the change
-// that actually reaches the cluster was never shown to anyone before it
-// landed. This prints it.
+// diff shows what rendering would change, against the manifests as
+// committed in THIS repo.
+//
+// It used to compare against the GitOps repo, back when a service's
+// manifests were copied there by hand. They are not: Argo reads each
+// service's deploy/ directory from the service's own repo, and the
+// GitOps repo holds only argocd.json. Comparing against it meant every
+// manifest came back "(new)" for a service that was deployed and
+// running - four false differences out of five outputs on pokedex - and
+// the empty case printed "up to date" about a directory holding one
+// JSON file, which reads as a statement about the deployment.
+//
+// Comparing against deploy/ here makes it a real check again: the same
+// question `render` + `git diff --exit-code` asks in CI, answerable
+// before committing.
 func diffCmd() *cobra.Command {
-	var against string
 	cmd := &cobra.Command{
 		Use:   "diff",
-		Short: "show what rendering would change in the GitOps repo",
-		Long: "Renders the config and compares it against the committed manifests,\n" +
-			"so a change can be reviewed before it reaches the cluster.\n\n" +
+		Short: "show what rendering would change in deploy/",
+		Long: "Renders the config and compares it against the manifests committed\n" +
+			"in deploy/, so a change can be reviewed before it is pushed.\n\n" +
+			"Argo reads those manifests from this repo, so they are what reaches\n" +
+			"the cluster.\n\n" +
 			"Exits 1 when they differ, so CI can require them to agree.",
 		Args: cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
@@ -32,32 +44,23 @@ func diffCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runDiff(path, against)
+			return runDiff(path)
 		},
 	}
-	cmd.Flags().StringVar(&against, "against", "", "GitOps repo checkout to compare with (default: $HOMELAB_REPO or ~/homelab)")
 	return cmd
 }
 
-func runDiff(cfgPath, against string) error {
+func runDiff(cfgPath string) error {
 	c, err := config.Load(cfgPath)
 	if err != nil {
 		return err
 	}
-	if against == "" {
-		against = os.Getenv("HOMELAB_REPO")
-	}
-	if against == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		against = filepath.Join(home, "homelab")
-	}
 
-	dir := filepath.Join(against, c.AppName())
+	// Where render writes, so the two commands cannot disagree about
+	// which directory holds this service's manifests.
+	dir := filepath.Join(filepath.Dir(cfgPath), "deploy", c.Name)
 	if _, err := os.Stat(dir); err != nil {
-		return fmt.Errorf("%s does not exist; this service is not in %s yet", dir, against)
+		return fmt.Errorf("%s does not exist; run `homelabctl render` first", dir)
 	}
 
 	src, err := withManifests(gitSource(cfgPath), c, cfgPath)
@@ -135,9 +138,6 @@ func unrenderedFiles(dir string, outs []render.Output) []string {
 	for _, o := range outs {
 		generated[o.Path] = true
 	}
-	// Written by the tool but owned by the GitOps repo, not by render.
-	generated["_argocd-application.yaml"] = true
-
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil

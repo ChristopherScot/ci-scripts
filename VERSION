@@ -1,4 +1,6 @@
-v1.5.0
+v1.6.0
+
+v1.6.0 diff compares against deploy/, where the manifests actually live
 
 v1.5.0 init stops narrating deploy; render.Files names the deploy plane's inventory
 
