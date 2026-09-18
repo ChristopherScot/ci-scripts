@@ -27,6 +27,7 @@ type initOpts struct {
 	owner      string
 	parentRepo string // create the service inside this existing repo
 	private    bool
+	noSpec     bool // hand-write server.go rather than generate from a spec
 	localOnly  bool
 	remoteOnly bool
 	dryRun     bool
@@ -59,6 +60,7 @@ func initCmd() *cobra.Command {
 	f.StringVar(&o.owner, "owner", "christopherscot", "GitHub owner")
 	f.StringVar(&o.parentRepo, "parent-repo", "", "add this service to an existing repo (monorepo) instead of creating one")
 	f.BoolVar(&o.private, "private", false, "create the GitHub repo private (image-updater then needs a registry credential)")
+	f.BoolVar(&o.noSpec, "no-spec", false, "hand-write server.go instead of generating the API from openapi.yml")
 	f.BoolVar(&o.localOnly, "local-only", false, "generate files only; create nothing on GitHub")
 	f.BoolVar(&o.remoteOnly, "remote-only", false, "create the GitHub repo only; generate no files")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print what would happen and stop")
@@ -94,7 +96,7 @@ func runInit(o initOpts) error {
 	arts := r.Artifacts(artifactParams(o, c))
 	isCLI := !arts.Deployable
 
-	if arts.Deployable && c.Hardened() && !r.SupportsHardened() {
+	if arts.Deployable && c.Hardened && !r.SupportsHardened() {
 		return fmt.Errorf("runtime %q cannot run hardened; set `hardened: false` in config.yaml", r.Name())
 	}
 	if err := confirm(o, c, isCLI); err != nil {
@@ -165,6 +167,7 @@ func artifactParams(o initOpts, c *config.Config) runtime.Params {
 	p := runtime.Params{
 		Name:        o.name,
 		Team:        c.Team,
+		Spec:        c.Spec,
 		SpecVersion: runtime.InitialSpecVersion,
 		Owner:       o.owner,
 		Port:        o.port,
@@ -234,6 +237,7 @@ func buildConfig(o initOpts) (*config.Config, error) {
 		Runtime: o.runtimeID,
 		Port:    o.port,
 		Image:   config.Image{Repository: image},
+		Spec:    !o.noSpec,
 	}
 	if o.host != "" {
 		c.Ingress = &config.Ingress{Host: o.host, Public: o.public}
@@ -416,7 +420,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// nothing to resolve
 		// Generate first - a lockfile cannot resolve an import that does
 		// not exist yet - then upgrade, then lock what that settled on.
-	} else if err := run(dir, r.Generate(), r.Upgrade(), r.Lock()); err != nil {
+	} else if err := run(dir, r.Generate(c.Spec), r.Upgrade(), r.Lock()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
@@ -501,6 +505,14 @@ port: %d
 image:
   repository: %s
 `, c.Name, c.Team, c.Runtime, c.Port, c.Image.Repository)
+	// Only when off, since spec-first is the default. It has to be
+	// written: every later command reads this file, and a service whose
+	// config claims a spec it does not have regenerates into a build
+	// failure.
+	if !c.Spec {
+		b.WriteString("\n# server.go is hand-written here; there is no openapi.yml to\n" +
+			"# generate from and no client for consumers to import.\nspec: false\n")
+	}
 	if c.Ingress != nil {
 		fmt.Fprintf(&b, "ingress:\n  host: %s\n  public: %t\n", c.Ingress.Host, c.Ingress.Public)
 	}

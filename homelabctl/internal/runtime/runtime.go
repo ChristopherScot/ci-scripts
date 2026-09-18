@@ -42,6 +42,18 @@ type Params struct {
 	Name string
 	Team string // owning team, stamped onto every log line
 
+	// Spec means this service generates its API from openapi.yml. False
+	// hand-writes server.go instead: no spec, no generated api/ package,
+	// no clients, and nothing for CI to check as stale.
+	//
+	// Always set explicitly by the caller from config.Spec, so unlike
+	// that field there is no "absent" case to represent here.
+	//
+	// The seam is one file. main.go, the Dockerfile, CI and every
+	// manifest are the same either way - which is what makes this a
+	// field rather than a second runtime.
+	Spec bool
+
 	// SpecVersion is the API version from the spec's info.version. The
 	// generated client reports it in X-Client-Version, so a server can
 	// see which client versions still call it. One version for the API
@@ -102,6 +114,12 @@ type Runtime interface {
 	// go-service, node-service, go-cli.
 	Name() string
 
+	// SpecFiles are the paths Artifacts writes only when Params.Spec is
+	// set - the spec, its generator config and everything generated from
+	// it. Named here so `check` and `regen` can ask what a specless
+	// service legitimately lacks rather than each keeping its own list.
+	SpecFiles() []string
+
 	// Artifacts are everything a new repo of this runtime starts with.
 	// A containerised runtime must produce an image that runs as uid 65532
 	// or set SupportsHardened false - otherwise the pod cannot exec its
@@ -115,8 +133,9 @@ type Runtime interface {
 
 	// Generate rebuilds what the service's own sources derive - code
 	// generated from its OpenAPI spec, say. Run in order, in the service
-	// directory. Nil if a runtime generates nothing.
-	Generate() [][]string
+	// directory. Nil if a runtime generates nothing, and nil for a
+	// service built without a spec: there is no source to derive from.
+	Generate(spec bool) [][]string
 
 	// Lock resolves declared dependencies into a lockfile: `go mod tidy`,
 	// `npm install --package-lock-only`. It reads what the manifest

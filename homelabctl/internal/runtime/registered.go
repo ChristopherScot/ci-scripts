@@ -47,6 +47,30 @@ func init() {
 			"gitignore":                    ".gitignore",
 			"dockerignore":                 ".dockerignore",
 		},
+		// Dropped entirely without a spec. The service keeps its
+		// Dockerfile, CI, manifests and main.go - only what openapi.yml
+		// feeds disappears.
+		specFiles: map[string]bool{
+			"openapi.yml.tmpl":             true,
+			"ogen.yml.tmpl":                true,
+			"generate.go.tmpl":             true,
+			"client.go.tmpl":               true,
+			"client_test.go.tmpl":          true,
+			"paging.go.tmpl":               true,
+			"paging_test.go.tmpl":          true,
+			"clients_ts_package.json.tmpl": true,
+			"clients_ts_index.js.tmpl":     true,
+			"clients_ts_index.d.ts.tmpl":   true,
+		},
+		// The three files that differ rather than disappear. server.go is
+		// the seam main.go was split from; its tests assert routing that
+		// is hand-written instead of generated; the workflow drops the
+		// stale-generated-code check and the spec-versioned release.
+		specSwaps: map[string]string{
+			"server.go.tmpl":    "server_plain.go.tmpl",
+			"main_test.go.tmpl": "main_test_plain.go.tmpl",
+			"workflow.yaml":     "workflow_plain.yaml",
+		},
 	})
 
 	// A CLI is not deployed: no Dockerfile, no manifests, no Argo app. It

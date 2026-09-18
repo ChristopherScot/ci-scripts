@@ -49,6 +49,15 @@ func runRegen(cfgPath string, checkOnly bool) error {
 	}
 	dir := filepath.Dir(cfgPath)
 
+	// A specless service generates nothing, so there is nothing here to
+	// be stale. Saying so beats failing on a missing openapi.yml, which
+	// reads like a setup mistake rather than a deliberate choice - and
+	// CI runs this on every service.
+	if !c.Spec {
+		fmt.Println("nothing to regenerate:", c.Name, "is built without a spec (spec: false)")
+		return nil
+	}
+
 	specVersion, err := specVersion(dir)
 	if err != nil {
 		return err
@@ -82,7 +91,7 @@ func runRegen(cfgPath string, checkOnly bool) error {
 	// what lets CI run this and fail on a diff. Upgrade belongs to
 	// creating a service; running it here would be a red build on any
 	// day a dependency published.
-	if err := run(dir, r.Generate(), r.Lock()); err != nil {
+	if err := run(dir, r.Generate(false), r.Lock()); err != nil {
 		return err
 	}
 	for _, s := range stale {
