@@ -140,6 +140,17 @@ func (p Params) ServiceDir() string {
 	return "."
 }
 
+// RepoURL is the https URL of the repository holding this service.
+//
+// npm's --provenance checks package.json's repository.url against the
+// repository in the OIDC claim and REJECTS a mismatch, so a published
+// package without it fails with "repository.url is \"\", expected to
+// match ...". Built from Owner and RepoName so it keeps GitHub's
+// canonical casing, which is what the claim carries.
+func (p Params) RepoURL() string {
+	return "https://github.com/" + p.Owner + "/" + p.RepoName()
+}
+
 // NPMScope is the owner lowercased, because npm rejects a scope with
 // any uppercase in it.
 //

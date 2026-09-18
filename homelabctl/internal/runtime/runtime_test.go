@@ -1485,3 +1485,62 @@ func TestNPMScopeIsLowercased(t *testing.T) {
 		t.Error("lowercasing leaked into the module path")
 	}
 }
+
+// npm's --provenance compares package.json's repository.url against the
+// repository in the OIDC claim and rejects a mismatch, so a generated
+// client without it cannot be published at all:
+//
+//	422 ... "repository.url" is "", expected to match
+//	         "https://github.com/ChristopherScot/pokemon" from provenance
+//
+// It also has to keep GitHub's casing, for the same reason the trusted
+// publisher does - the claim carries the canonical spelling.
+func TestGeneratedClientCarriesItsRepositoryURL(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		params func() Params
+		want   string
+	}{
+		{"standalone", func() Params {
+			p := testParams()
+			p.Owner = "ChristopherScot"
+			p.Module = "github.com/ChristopherScot/svc"
+			return p
+		}, "https://github.com/ChristopherScot/svc"},
+		{"monorepo", func() Params {
+			p := testParams()
+			p.Owner = "ChristopherScot"
+			p.Module = "github.com/ChristopherScot/mono/services/svc"
+			p.PathFilter = "services/svc"
+			return p
+		}, "https://github.com/ChristopherScot/mono"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.params()
+			if got := p.RepoURL(); got != tc.want {
+				t.Errorf("RepoURL() = %q, want %q", got, tc.want)
+			}
+
+			var pkg string
+			for _, f := range r.Artifacts(p).Files {
+				if f.Path == "clients/ts/package.json" {
+					pkg = f.Body
+				}
+			}
+			if pkg == "" {
+				t.Fatal("no generated client package.json")
+			}
+			if !strings.Contains(pkg, tc.want) {
+				t.Errorf("package.json does not carry the repository URL:\n%s", pkg)
+			}
+			// And the scope stays lowercase, which npm requires.
+			if !strings.Contains(pkg, `"@christopherscot/`) {
+				t.Errorf("npm scope is not lowercased:\n%s", pkg)
+			}
+		})
+	}
+}
