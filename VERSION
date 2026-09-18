@@ -1,11 +1,3 @@
-v1.0.1
+v1.1.0
 
-v1.0.1 Cross-compiled assets with version injected, so self-update works
-
-v0.0.4 Allow specifying config file location
-
-v0.0.3 Bump because I didn't upload the github-action workflow in v0.0.1       
-
-v0.0.2 Might actually work for my personal use if I don't do anything complicated.
-
-v0.0.1 This is still in its pre-alpha phase and not actually useful yet. Releasing for import and testing. 
+v1.1.0 spec-optional services, ingress host lists, and per-app vault properties
