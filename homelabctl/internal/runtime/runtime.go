@@ -22,6 +22,7 @@ package runtime
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // InitialSpecVersion is where a new service's API starts. It reaches both
@@ -73,6 +74,20 @@ type Params struct {
 
 	// BuildSteps is filled in by the runtime before rendering its workflow.
 	BuildSteps string
+}
+
+// BinaryName is what `go build` with no -o produces: the last element of
+// the module path, which is not always the service name. The repo
+// go-shlink-redirector holds the service shlink-redirector, so a
+// .gitignore keyed on the name would miss the binary entirely.
+func (p Params) BinaryName() string {
+	if i := strings.LastIndex(p.Module, "/"); i >= 0 {
+		return p.Module[i+1:]
+	}
+	if p.Module != "" {
+		return p.Module
+	}
+	return p.Name
 }
 
 // Context is the Docker build context: the service directory in a

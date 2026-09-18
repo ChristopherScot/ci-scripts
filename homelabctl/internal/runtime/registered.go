@@ -44,7 +44,7 @@ func init() {
 			"clients_ts_package.json.tmpl": "package.json",
 			"clients_ts_index.js.tmpl":     "clients/ts/index.js",
 			"clients_ts_index.d.ts.tmpl":   "clients/ts/index.d.ts",
-			"gitignore":                    ".gitignore",
+			"gitignore.tmpl":               ".gitignore",
 			"dockerignore":                 ".dockerignore",
 		},
 		// Dropped entirely without a spec. The service keeps its
@@ -87,7 +87,7 @@ func init() {
 			"main_test.go.tmpl":  "main_test.go",
 			"completion.go.tmpl": "completion.go",
 			"VERSION.tmpl":       "VERSION",
-			"gitignore":          ".gitignore",
+			"gitignore.tmpl":     ".gitignore",
 		},
 	})
 
