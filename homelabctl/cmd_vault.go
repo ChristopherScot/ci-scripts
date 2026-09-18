@@ -1,14 +1,13 @@
 package main
 
 import (
-	"bytes"
-	"errors"
+	"context"
 	"fmt"
-	"os"
-	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
+	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -75,95 +74,97 @@ path "kv/metadata/%s/*" {
 `, base, base, base, base)
 }
 
-// roleArgs is the single definition of the role. vaultCommands prints
-// these and applyVault runs them, so the preview cannot drift from what is
-// actually written.
-func roleArgs(c *config.Config) []string {
-	return []string{
-		"write", "auth/kubernetes/role/" + c.VaultRoleName(),
-		"bound_service_account_names=" + c.ServiceAccountName(),
-		"bound_service_account_namespaces=" + c.Namespace,
-		"policies=" + c.VaultPolicyName(),
-		"ttl=1h",
+// serviceRole is the single definition of the role this service needs.
+// vaultCommands prints it and applyVault writes it, so the preview cannot
+// drift from what actually lands in Vault.
+func serviceRole(c *config.Config) vault.Role {
+	return vault.Role{
+		ServiceAccounts: []string{c.ServiceAccountName()},
+		Namespaces:      []string{c.Namespace},
+		Policies:        []string{c.VaultPolicyName()},
+		TTLSeconds:      3600,
 	}
 }
 
 // vaultCommands renders what --apply would run, so it can be reviewed,
 // pasted, or committed before anything touches Vault.
 func vaultCommands(c *config.Config) string {
-	args := roleArgs(c)
+	r := serviceRole(c)
 	return fmt.Sprintf(`# Vault policy and role for %s, derived from its config.
 # Apply with: homelabctl vault config.yaml --apply
 
 vault policy write %s - <<'POLICY'
 %sPOLICY
 
-vault %s \
-  %s
-`, c.Name, c.VaultPolicyName(), vaultPolicy(c), args[0]+" "+args[1], strings.Join(args[2:], " \\\n  "))
+vault write auth/kubernetes/role/%s \
+  bound_service_account_names=%s \
+  bound_service_account_namespaces=%s \
+  policies=%s \
+  ttl=%s
+`, c.Name, c.VaultPolicyName(), vaultPolicy(c), c.VaultRoleName(),
+		strings.Join(r.ServiceAccounts, ","), strings.Join(r.Namespaces, ","),
+		strings.Join(r.Policies, ","), fmt.Sprintf("%ds", r.TTLSeconds))
 }
 
-// applyVault runs the policy and role writes through the vault-0 pod. Both
-// are replace-on-write, so this is idempotent - running it twice leaves the
+// applyVault writes the policy and role over Vault's HTTP API. Both are
+// replace-on-write, so this is idempotent: running it twice leaves the
 // same state as running it once.
 func applyVault(c *config.Config) error {
-	token, err := vaultToken()
+	token, err := vault.Token()
 	if err != nil {
 		return err
 	}
+	cl, err := vault.New(token)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
 
-	if err := vaultExec(token, vaultPolicy(c), "policy", "write", c.VaultPolicyName(), "-"); err != nil {
-		return fmt.Errorf("write policy %s: %w", c.VaultPolicyName(), err)
+	if err := cl.WritePolicy(ctx, c.VaultPolicyName(), vaultPolicy(c)); err != nil {
+		return err
 	}
 	fmt.Printf("wrote policy %s\n", c.VaultPolicyName())
 
-	if err := vaultExec(token, "", roleArgs(c)...); err != nil {
-		return fmt.Errorf("write role %s: %w", c.Name, err)
+	want := serviceRole(c)
+	if err := cl.WriteRole(ctx, c.VaultRoleName(), want); err != nil {
+		return err
 	}
-	fmt.Printf("wrote role auth/kubernetes/role/%s (sa=%s ns=%s)\n",
-		c.VaultRoleName(), c.ServiceAccountName(), c.Namespace)
+
+	// Read it back rather than trusting the write. Vault accepts a role
+	// and normalises it - a TTL sent as a duration comes back as
+	// seconds - so "no error" does not mean "what the config asked for".
+	// This is also the only thing that would notice a policy name the
+	// role does not actually carry, which is how a pod ends up
+	// authenticating successfully and still being denied every read.
+	got, err := cl.ReadRole(ctx, c.VaultRoleName())
+	if err != nil {
+		return fmt.Errorf("role was written but could not be read back: %w", err)
+	}
+	if diff := roleDiff(want, *got); diff != "" {
+		return fmt.Errorf("role %s does not match the config after writing:\n%s",
+			c.VaultRoleName(), diff)
+	}
+
+	fmt.Printf("wrote role auth/kubernetes/role/%s (sa=%s ns=%s) at %s\n",
+		c.VaultRoleName(), c.ServiceAccountName(), c.Namespace, cl.Address())
+	fmt.Println("verified: reads back as written")
 	return nil
 }
 
-// vaultToken reads the token to authenticate with, preferring the
-// environment so callers can supply a narrower one than root.
-func vaultToken() (string, error) {
-	if t := os.Getenv("VAULT_TOKEN"); t != "" {
-		return t, nil
-	}
-	out, err := exec.Command("op", "read", "op://Employee/homelab-vault-root/password").Output()
-	if err != nil {
-		// op explains itself on stderr - not signed in, item renamed,
-		// wrong vault - and Output() hides that behind "exit status 1".
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return "", fmt.Errorf("no VAULT_TOKEN set and reading one from 1Password failed: %s",
-				bytes.TrimSpace(ee.Stderr))
+// roleDiff reports how a role in Vault differs from what the config
+// asks for, as lines a person can act on. Empty means they agree.
+func roleDiff(want, got vault.Role) string {
+	var b strings.Builder
+	cmp := func(field string, w, g []string) {
+		if !slices.Equal(w, g) {
+			fmt.Fprintf(&b, "  %s: want %v, got %v\n", field, w, g)
 		}
-		return "", fmt.Errorf("no VAULT_TOKEN set and could not read one from 1Password: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// vaultExec runs a vault command inside the vault-0 pod. stdin is passed
-// explicitly rather than inferred from a trailing "-" in args: inferring it
-// means a later arg silently leaves stdin empty, and `vault policy write
-// name -` on empty stdin writes an EMPTY POLICY and exits 0 - the service
-// then loses all access with no error anywhere.
-//
-// The token goes in on stdin too, never in argv: argv is readable by any
-// local process via ps, appears in the container's process table, and is
-// recorded in the API server's audit log for pods/exec. This is the
-// cluster's root token.
-func vaultExec(token, stdin string, args ...string) error {
-	script := `read -r VAULT_TOKEN
-export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
-exec vault "$@"`
-
-	full := append([]string{"exec", "-i", "-n", "default", "vault-0", "--",
-		"sh", "-c", script, "sh"}, args...)
-	cmd := exec.Command("kubectl", full...)
-	cmd.Stdin = strings.NewReader(token + "\n" + stdin)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	cmp("bound_service_account_names", want.ServiceAccounts, got.ServiceAccounts)
+	cmp("bound_service_account_namespaces", want.Namespaces, got.Namespaces)
+	cmp("token_policies", want.Policies, got.Policies)
+	if want.TTLSeconds != got.TTLSeconds {
+		fmt.Fprintf(&b, "  token_ttl: want %ds, got %ds\n", want.TTLSeconds, got.TTLSeconds)
+	}
+	return b.String()
 }
