@@ -784,3 +784,51 @@ func TestBinaryNameComesFromTheModulePath(t *testing.T) {
 		}
 	}
 }
+
+// The workflow does not go through renderFiles - Artifacts carries it
+// separately - so it once missed the specless swap entirely and a
+// service scaffolded with --no-spec got CI that ran `homelabctl regen`
+// and diffed against an openapi.yml it does not have. It failed on the
+// first push, which is the worst place to find out.
+func TestSpeclessServiceGetsSpeclessCI(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := testParams()
+	p.Spec = false
+
+	// Checked against the RUNNABLE lines only: the header comment names
+	// openapi.yml to explain why the spec-first jobs are absent, and
+	// that explanation is the point rather than a leak.
+	var steps []string
+	for _, line := range strings.Split(r.Artifacts(p).Workflow, "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			steps = append(steps, line)
+		}
+	}
+	wf := strings.Join(steps, "\n")
+	for _, absent := range []string{"openapi.yml", "homelabctl regen", "info.version"} {
+		if strings.Contains(wf, absent) {
+			t.Errorf("specless CI runs %q, which this service has no source for:\n%s", absent, wf)
+		}
+	}
+	// It must still build and check the manifests.
+	for _, required := range []string{"docker/build-push-action", "check deploy"} {
+		if !strings.Contains(wf, required) {
+			t.Errorf("specless CI lost %q", required)
+		}
+	}
+}
+
+// And the spec-first default keeps its regen check.
+func TestSpecFirstServiceKeepsTheStalenessCheck(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := r.Artifacts(testParams()).Workflow
+	if !strings.Contains(wf, "homelabctl regen") {
+		t.Error("spec-first CI no longer checks that generated code is current")
+	}
+}

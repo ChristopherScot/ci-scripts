@@ -83,6 +83,17 @@ func (e embedded) SpecFiles() []string {
 func (e embedded) Lock() [][]string    { return e.lock }
 func (e embedded) Upgrade() [][]string { return e.upgrade }
 
+// swap returns the template to use for src: the specless variant when
+// this service has no spec, the original otherwise.
+func (e embedded) swap(src string, p Params) string {
+	if !p.Spec {
+		if alt, ok := e.specSwaps[src]; ok {
+			return alt
+		}
+	}
+	return src
+}
+
 func (e embedded) read(name string) string {
 	b, err := templates.ReadFile(path.Join("templates", e.dir, name))
 	if err != nil {
@@ -115,7 +126,11 @@ func (e embedded) Artifacts(p Params) Artifacts {
 	}
 	// The workflow embeds the runtime's build steps, so render those first.
 	p.BuildSteps = e.buildSteps(p)
-	a.Workflow = e.render("workflow.yaml", p)
+	// Through the same swap table as every other file. It does not go
+	// through renderFiles - Artifacts carries it separately - so the
+	// lookup has to be repeated here, or a specless service gets CI that
+	// regenerates from a spec it does not have.
+	a.Workflow = e.render(e.swap("workflow.yaml", p), p)
 	return a
 }
 
@@ -144,11 +159,7 @@ func (e embedded) renderFiles(p Params) []File {
 	out := make([]File, 0, len(e.files))
 	for _, src := range srcs {
 		dst := e.files[src]
-		if !p.Spec {
-			if swap, ok := e.specSwaps[src]; ok {
-				src = swap
-			}
-		}
+		src = e.swap(src, p)
 		body := e.read(src)
 		if strings.HasSuffix(src, ".tmpl") {
 			body = e.render(src, p)
