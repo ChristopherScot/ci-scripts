@@ -71,9 +71,41 @@ func openGitOpsPR(name, entry string) (string, error) {
 	path := name + "/" + render.AppEntryFile
 	branch := "register-" + name
 
-	// Already registered is the ordinary case for a re-run. Returning
-	// early rather than opening an empty PR.
-	if exec.Command("gh", "api", "repos/"+slug+"/contents/"+path).Run() == nil {
+	// What is registered now, if anything. An existing entry is not a
+	// reason to stop: argocd.json gains fields - repoURL and path did -
+	// and a service whose entry predates them renders an Application
+	// pointing nowhere. Registering has to mean "make it current", or
+	// every schema change becomes a hand-edit of every service.
+	//
+	// The blob sha is also what lets the update be a PUT rather than a
+	// create, which the API rejects for a file that exists.
+	// Two calls rather than one with a concatenating --jq: the API
+	// returns base64 WITH newlines, so joining content and sha into one
+	// string and splitting it back gives a truncated sha and a 409 on
+	// the write.
+	var existing, blobSHA string
+	if out, err := exec.Command("gh", "api", "repos/"+slug+"/contents/"+path, "--jq", ".sha").Output(); err == nil {
+		blobSHA = strings.TrimSpace(string(out))
+	}
+	// The branch may already carry a version from an earlier run, whose
+	// PR is still open. The write is against the BRANCH, so its sha is
+	// the one the API wants - main's is stale there, and no sha at all
+	// is a 422 on a file that exists.
+	if out, err := exec.Command("gh", "api",
+		"repos/"+slug+"/contents/"+path+"?ref="+branch, "--jq", ".sha").Output(); err == nil {
+		if s := strings.TrimSpace(string(out)); s != "" {
+			blobSHA = s
+		}
+	}
+	if blobSHA != "" {
+		if out, err := exec.Command("gh", "api", "repos/"+slug+"/contents/"+path, "--jq", ".content").Output(); err == nil {
+			if raw, err := base64.StdEncoding.DecodeString(
+				strings.ReplaceAll(strings.TrimSpace(string(out)), "\n", "")); err == nil {
+				existing = string(raw)
+			}
+		}
+	}
+	if existing == entry {
 		return "", nil
 	}
 
@@ -90,11 +122,18 @@ func openGitOpsPR(name, entry string) (string, error) {
 	create.Stdin = strings.NewReader(string(ref))
 	_ = create.Run()
 
-	body, _ := json.Marshal(map[string]string{
+	fields := map[string]string{
 		"message": "argo: register " + name,
 		"content": base64.StdEncoding.EncodeToString([]byte(entry)),
 		"branch":  branch,
-	})
+	}
+	if blobSHA != "" {
+		// Replacing a file needs the sha of what is being replaced; the
+		// API refuses the write without it.
+		fields["message"] = "argo: update " + name
+		fields["sha"] = blobSHA
+	}
+	body, _ := json.Marshal(fields)
 	put := exec.Command("gh", "api", "--method", "PUT", "repos/"+slug+"/contents/"+path, "--input", "-")
 	put.Stdin = strings.NewReader(string(body))
 	put.Stderr = os.Stderr
@@ -102,12 +141,18 @@ func openGitOpsPR(name, entry string) (string, error) {
 		return "", fmt.Errorf("writing %s to %s: %w", path, slug, err)
 	}
 
+	title, prBody := "argo: register "+name, "Adds `"+path+"` so the homelabctl-services "+
+		"ApplicationSet generates an Application for `"+name+"`.\n\nIts manifests stay in "+
+		"the service's own repo; this file only tells Argo where to find them."
+	if blobSHA != "" {
+		title = "argo: update " + name
+		prBody = "Brings `" + path + "` up to date with what `homelabctl render` produces.\n\n" +
+			"A stale entry renders an Application with fields the template expects and the " +
+			"file does not carry."
+	}
 	pr, err := exec.Command("gh", "pr", "create",
 		"--repo", slug, "--head", branch, "--base", "main",
-		"--title", "argo: register "+name,
-		"--body", "Adds `"+path+"` so the homelabctl-services ApplicationSet "+
-			"generates an Application for `"+name+"`.\n\nIts manifests stay in "+
-			"the service's own repo; this file only tells Argo where to find them.",
+		"--title", title, "--body", prBody,
 	).Output()
 	if err != nil {
 		// The PR may already exist from an earlier run, which is not a
