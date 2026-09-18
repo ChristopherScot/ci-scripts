@@ -887,3 +887,36 @@ func TestGenerateFollowsTheConfigsSpecSetting(t *testing.T) {
 		t.Errorf("a specless service would run %v, against a spec it does not have", got)
 	}
 }
+
+// main.go tells the reader it is theirs and lists what is not. That
+// claim has to stay true, and it differs by variant: a specless service
+// has no api/ or clients/ to lose, so naming them would send someone
+// looking for a directory that does not exist.
+func TestMainDocumentsWhatItOwns(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainOf := func(p Params) string {
+		for _, f := range r.Artifacts(p).Files {
+			if f.Path == "main.go" {
+				return f.Body
+			}
+		}
+		t.Fatal("no main.go")
+		return ""
+	}
+
+	spec := mainOf(testParams())
+	for _, want := range []string{"THIS FILE IS YOURS", "api/, clients/", "deploy/*.yaml"} {
+		if !strings.Contains(spec, want) {
+			t.Errorf("spec-first main.go does not mention %q", want)
+		}
+	}
+
+	p := testParams()
+	p.Spec = false
+	if s := mainOf(p); strings.Contains(s, "api/, clients/") {
+		t.Error("specless main.go claims api/ and clients/, which it does not have")
+	}
+}
