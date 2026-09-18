@@ -473,6 +473,26 @@ func workflowPath(o initOpts) string {
 	return ".github/workflows/build.yaml"
 }
 
+// publishWorkflowPath is where the npm publish workflow lands: always
+// .github/workflows/publish.yaml at the REPOSITORY root, whichever
+// layout this is.
+//
+// Fixed because npm trusted publishing takes the workflow filename at
+// setup and will not let it change afterwards. One name means
+// configuring a package is the same three values every time - owner,
+// repo, publish.yaml - rather than a lookup per service.
+//
+// At the root because one workflow covers every client in the repo: it
+// finds clients/ts/package.json rather than naming paths, so a monorepo
+// publishes each service's client and a single-service repo publishes
+// its one.
+func publishWorkflowPath(o initOpts) string {
+	if o.parentRepo != "" {
+		return filepath.ToSlash(filepath.Join("..", "..", ".github", "workflows", "publish.yaml"))
+	}
+	return ".github/workflows/publish.yaml"
+}
+
 // overwritable reports whether --overwrite may rewrite a scaffolded
 // file from its template.
 //
@@ -631,6 +651,9 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// literal a user would have to guess.
 		scaffolding[workflowPath(o)] = true
 	}
+	if a.PublishWorkflow != "" {
+		scaffolding[publishWorkflowPath(o)] = true
+	}
 	for _, f := range a.Files {
 		if overwritable(f.Path) {
 			scaffolding[f.Path] = true
@@ -721,6 +744,18 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	wfPath := workflowPath(o)
 	if err := put(wfPath, a.Workflow); err != nil {
 		return err
+	}
+
+	// The publish workflow, if this runtime generates anything to
+	// publish. Byte-identical in every repo - it carries no service name
+	// and no template variables, and discovers clients by looking for
+	// clients/ts/package.json - so writing it for the second service in
+	// a monorepo is a no-op rather than a conflict, and adding a third
+	// service never requires editing it.
+	if a.PublishWorkflow != "" {
+		if err := put(publishWorkflowPath(o), a.PublishWorkflow); err != nil {
+			return err
+		}
 	}
 
 	// Resolve dependencies so the scaffold builds immediately. Without a

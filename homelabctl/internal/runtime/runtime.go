@@ -140,6 +140,17 @@ func (p Params) ServiceDir() string {
 	return "."
 }
 
+// NPMScope is the owner lowercased, because npm rejects a scope with
+// any uppercase in it.
+//
+// GitHub owners keep their casing - ChristopherScot - and the module
+// path and image path use it, so this cannot just lowercase Owner
+// everywhere. A package scaffolded with the GitHub spelling publishes
+// with a 400 that says only "Invalid package name".
+func (p Params) NPMScope() string {
+	return strings.ToLower(p.Owner)
+}
+
 // Artifacts is everything a runtime contributes to a new repo.
 //
 // Callers branch on the DATA here, not on a kind tag: a CLI simply has no
@@ -154,6 +165,16 @@ type Artifacts struct {
 
 	// Workflow is the CI that builds this runtime's artifacts.
 	Workflow string
+
+	// PublishWorkflow publishes generated packages to a registry, empty
+	// for a runtime that generates none.
+	//
+	// Separate from Workflow and at a FIXED filename, because npm
+	// trusted publishing is configured per package with the workflow
+	// filename as one of the fields that cannot be changed afterwards.
+	// One name across every repo makes that setup the same three values
+	// every time.
+	PublishWorkflow string
 
 	// Deployable says whether Kubernetes manifests and an Argo Application
 	// apply. False for a CLI, which ships as release assets.

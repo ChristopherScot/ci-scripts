@@ -1183,12 +1183,26 @@ func TestTypeScriptClientPublishesByOIDC(t *testing.T) {
 	}
 	p := testParams()
 	p.Spec = true
-	wf := r.Artifacts(p).Workflow
+	a := r.Artifacts(p)
+
+	// The PUBLISH workflow, not the service's. Publishing moved to its
+	// own fixed-name file because npm trusted publishing takes the
+	// workflow filename at setup and cannot change it afterwards.
+	wf := a.PublishWorkflow
+	if wf == "" {
+		t.Fatal("no publish workflow")
+	}
 
 	for _, want := range []string{"id-token: write", "npm publish --provenance"} {
 		if !strings.Contains(wf, want) {
-			t.Errorf("workflow missing %q", want)
+			t.Errorf("publish workflow missing %q", want)
 		}
+	}
+
+	// And the service workflow must NOT publish, or a package would need
+	// a second trusted-publisher configuration naming it.
+	if strings.Contains(a.Workflow, "npm publish") {
+		t.Error("the service workflow still publishes; that is publish.yaml's job")
 	}
 	// A token would still work today, which is exactly why this asserts
 	// its absence: the thing that breaks in 2027 looks fine now.
@@ -1383,5 +1397,91 @@ func TestSelfUpdateNamesTheRepoThatHoldsTheReleases(t *testing.T) {
 				t.Errorf("%s: update.go does not name the parent repo", rt)
 			}
 		}
+	}
+}
+
+// The npm publish workflow is byte-identical in every repo.
+//
+// That is what makes it work for both layouts and survive a new
+// service: it carries no service name and no template variables, and
+// finds clients by looking for clients/ts/package.json rather than
+// naming paths. A path list would go stale the first time someone adds
+// a service and does not think about this file.
+//
+// It also has to be one FIXED filename, because npm trusted publishing
+// takes the workflow filename at setup and will not let it change
+// afterwards - a per-service name would mean a different configuration
+// to fill in for every package.
+func TestPublishWorkflowIsIdenticalEverywhere(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	standalone := r.Artifacts(testParams()).PublishWorkflow
+	if standalone == "" {
+		t.Fatal("go-service ships no publish workflow")
+	}
+
+	mono := testParams()
+	mono.Name = "other"
+	mono.PathFilter = "services/other"
+	if got := r.Artifacts(mono).PublishWorkflow; got != standalone {
+		t.Error("the publish workflow differs between layouts; it must be identical to be written once per repo")
+	}
+
+	// No service name anywhere in it, or adding a service would mean
+	// editing it.
+	for _, name := range []string{"svc", "other", "services/svc"} {
+		if strings.Contains(standalone, name) {
+			t.Errorf("publish workflow mentions %q; it must be service-agnostic", name)
+		}
+	}
+	// It discovers clients rather than listing them.
+	if !strings.Contains(standalone, "clients/ts/package.json") {
+		t.Error("publish workflow does not search for generated clients")
+	}
+}
+
+// A runtime that generates nothing publishable ships no publish
+// workflow, or a CLI repo gets CI that can only ever find nothing.
+func TestOnlySpecFirstServicesShipAPublishWorkflow(t *testing.T) {
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := testParams()
+		got := r.Artifacts(p).PublishWorkflow
+
+		// go-service with a spec is the only runtime generating a
+		// TypeScript client today.
+		want := name == "go-service"
+		if (got != "") != want {
+			t.Errorf("%s: publish workflow present = %v, want %v", name, got != "", want)
+		}
+	}
+
+	// And not even go-service without a spec: no spec, no client.
+	r, _ := Get("go-service")
+	p := testParams()
+	p.Spec = false
+	if r.Artifacts(p).PublishWorkflow != "" {
+		t.Error("a specless service ships a publish workflow with nothing to publish")
+	}
+}
+
+// npm rejects an uppercase scope. GitHub owners keep their casing and
+// the module path uses it, so this cannot be fixed by lowercasing Owner
+// everywhere - the package name needs its own accessor.
+func TestNPMScopeIsLowercased(t *testing.T) {
+	p := testParams()
+	p.Owner = "ChristopherScot"
+	if got := p.NPMScope(); got != "christopherscot" {
+		t.Errorf("NPMScope() = %q, want christopherscot", got)
+	}
+	// The module path keeps the real casing.
+	if strings.Contains(p.Module, "christopherscot") && !strings.Contains(p.Module, "ChristopherScot") {
+		t.Error("lowercasing leaked into the module path")
 	}
 }

@@ -117,11 +117,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      # No id-token: publishing is publish.yaml's, and this job only
+      # pushes a tag.
       contents: write
-      # Lets this job request an OIDC token, which is how npm trusted
-      # publishing authenticates. It grants no write access to anything
-      # here - the name reads alarming and is not.
-      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -153,40 +151,10 @@ jobs:
           echo "publish=true" >> $GITHUB_OUTPUT
         id: spec
 
-      # The TypeScript client, published on the same trigger as the Go
-      # tag above so both clients for one spec version appear together.
+      # Publishing the TypeScript client is publish.yaml's job.
       #
-      # Go consumers need no registry - a tag on this repo IS the client
-      # version. npm has no equivalent: `npm install github:owner/repo`
-      # reads package.json from the REPOSITORY root, which is not where a
-      # monorepo service lives, so publishing is the only path that works
-      # for both layouts.
-      - uses: actions/setup-node@v4
-        if: steps.spec.outputs.publish == 'true'
-        with:
-          # 24 for npm >= 11.5.1, which trusted publishing requires.
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-
-      - name: Publish the TypeScript client
-        if: steps.spec.outputs.publish == 'true'
-        working-directory: {{ if .PathFilter }}{{ .PathFilter }}/{{ end }}clients/ts
-        # No token. npm trusted publishing authenticates this workflow by
-        # OIDC, so there is no long-lived credential in the repo's
-        # secrets to leak, rotate, or forget to rotate.
-        #
-        # It needs a one-time setup on npmjs.com, per package:
-        #   Packages > <package> > Settings > Trusted publishing
-        # naming this repository and this workflow file. Until that
-        # exists the step fails with an auth error, which is the right
-        # outcome - a Go tag whose TypeScript counterpart silently never
-        # shipped is worse.
-        #
-        # Automation tokens were the obvious alternative and are on the
-        # way out: npm blocks 2FA-bypass tokens from account operations
-        # from August 2026 and from publishing entirely around January
-        # 2027.
-        #
-        # --provenance records where the package was built. It is free
-        # here because OIDC already proves it.
-        run: npm publish --provenance
+      # npm trusted publishing is configured per package and the workflow
+      # FILENAME is one of the fields fixed at setup. Publishing from
+      # here would mean a configuration naming a different workflow for
+      # every package; one publish.yaml at the repo root means the same
+      # three values every time. The tag pushed above is its trigger.

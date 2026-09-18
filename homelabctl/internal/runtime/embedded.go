@@ -135,6 +135,16 @@ func (e embedded) read(name string) string {
 	return string(b)
 }
 
+// readIfPresent is read for a template only some runtimes ship, so a
+// runtime without one is a fact rather than a panic.
+func (e embedded) readIfPresent(name string) string {
+	b, err := templates.ReadFile(path.Join("templates", e.dir, name))
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 func (e embedded) render(name string, p Params) string {
 	t, err := template.New(name).Parse(e.read(name))
 	if err != nil {
@@ -162,6 +172,13 @@ func (e embedded) Artifacts(p Params) Artifacts {
 	// lookup has to be repeated here, or a specless service gets CI that
 	// regenerates from a spec it does not have.
 	a.Workflow = e.render(e.swap("workflow.yaml", p), p)
+	// Only a spec-first service generates a client, and only a
+	// generated client needs publishing.
+	if p.Spec {
+		if body := e.readIfPresent("publish.yaml"); body != "" {
+			a.PublishWorkflow = body
+		}
+	}
 	return a
 }
 
