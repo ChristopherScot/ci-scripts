@@ -102,6 +102,22 @@ type Config struct {
 
 type Image struct {
 	// Registry path without a tag, e.g. ghcr.io/christopherscot/foo.
+	//
+	// Any registry works here - rendering only ever copies this string
+	// into the manifests, so an ECR or Docker Hub path flows through
+	// unchanged. init defaults it to ghcr.io/<owner>/<name> because that
+	// is the registry the generated workflow can authenticate to without
+	// a stored credential: it logs in as github.actor with GITHUB_TOKEN,
+	// which is issued per run and can only push packages.
+	//
+	// Pointing this somewhere else therefore means editing that login
+	// step in .github/workflows/<name>.yaml to match - ECR wants
+	// aws-actions/amazon-ecr-login, Docker Hub a stored PAT. Note
+	// `init --overwrite` rewrites the workflow from the template, so it
+	// would discard that edit.
+	//
+	// Lowercase: registries reject uppercase paths, and init lowercases
+	// what it generates for that reason.
 	Repository string `yaml:"repository,omitempty"`
 }
 

@@ -76,7 +76,7 @@ const Schema = `{
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "repository": { "type": "string", "description": "Registry path without a tag." }
+        "repository": { "type": "string", "description": "Registry path without a tag, lowercase. Any registry works; ghcr.io is the default because the generated workflow authenticates to it with GITHUB_TOKEN. Another registry means editing that workflow's login step." }
       }
     },
     "env": {

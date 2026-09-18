@@ -74,6 +74,12 @@ jobs:
       # with "Cache export is not supported for the docker driver".
       - uses: docker/setup-buildx-action@v3
 
+      # ghcr.io specifically: github.actor + GITHUB_TOKEN authenticate
+      # to GitHub's registry and nothing else. Pointing image.repository
+      # at ECR or Docker Hub means replacing this step with that
+      # registry's login action and a stored credential - and note
+      # `homelabctl init --overwrite` rewrites this file from the
+      # template, which would discard that edit.
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
         with:
