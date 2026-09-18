@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -416,5 +417,26 @@ func TestPublishWorkflowPathIsTheRepoRoot(t *testing.T) {
 	}
 	if got := publishWorkflowPath(initOpts{name: "gadget"}); got != ".github/workflows/publish.yaml" {
 		t.Errorf("standalone: %q", got)
+	}
+}
+
+// npm's trusted publishing compares every field literally, and the
+// organization is the one that bites: GitHub's OIDC token carries the
+// canonical casing (ChristopherScot), so a configuration created with a
+// lowercased owner never matches and every publish 404s with a message
+// about the package rather than the owner.
+//
+// The npm SCOPE is the opposite - npm rejects uppercase there - so the
+// two cannot simply share a value, which is exactly how they drift.
+func TestTrustCommandKeepsRepoCasingAndLowercasesOnlyTheScope(t *testing.T) {
+	var out bytes.Buffer
+	printTrustCommand(&out, initOpts{name: "widget", owner: "ChristopherScot", parentRepo: "shop"}, "widget")
+
+	got := out.String()
+	if !strings.Contains(got, "--repo ChristopherScot/shop") {
+		t.Errorf("repo lost GitHub's casing, which npm compares literally:\n%s", got)
+	}
+	if !strings.Contains(got, "@christopherscot/widget-client") {
+		t.Errorf("npm scope is not lowercased, which npm rejects:\n%s", got)
 	}
 }

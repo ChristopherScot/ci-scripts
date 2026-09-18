@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -473,6 +474,27 @@ func workflowPath(o initOpts) string {
 	return ".github/workflows/build.yaml"
 }
 
+// printTrustCommand writes the one-liner that registers this package's
+// trusted publisher.
+//
+// Extracted so the casing is testable, because npm compares every field
+// LITERALLY and the two halves need opposite treatment:
+//
+//   - the npm scope must be lowercase, or npm rejects the package name;
+//   - the GitHub owner must keep its canonical casing, because that is
+//     what the OIDC token carries. A configuration created with a
+//     lowercased owner never matches, and the failure is a 404 naming
+//     the package, which points nowhere near the owner.
+//
+// Sharing one value between them is how they drift, so they are derived
+// separately here rather than from a single variable.
+func printTrustCommand(w io.Writer, o initOpts, name string) {
+	fmt.Fprintf(w, "      npm trust github @%s/%s-client \\\n", strings.ToLower(o.owner), name)
+	fmt.Fprintf(w, "        --file publish.yaml --repo %s/%s --allow-publish\n",
+		o.owner, publishRepo(o))
+	fmt.Fprintln(w, "    (needs npm >= 11.10; it opens a browser to authenticate)")
+}
+
 // publishRepo is the GitHub repository holding this service, which is
 // what a trusted publisher is configured against: the parent in a
 // monorepo, the service's own repo otherwise.
@@ -844,10 +866,7 @@ func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 		fmt.Printf("      cd %s/clients/ts && npm publish\n", dir)
 		fmt.Println()
 		fmt.Println("  - then let CI publish every version after that:")
-		fmt.Printf("      npm trust github @%s/%s-client \\\n", strings.ToLower(o.owner), c.Name)
-		fmt.Printf("        --file publish.yaml --repo %s/%s --allow-publish\n",
-			o.owner, publishRepo(o))
-		fmt.Println("    (needs npm >= 11.10; it opens a browser to authenticate)")
+		printTrustCommand(os.Stdout, o, c.Name)
 		fmt.Println()
 	} else if !isCLI {
 		// No spec: server.go is the surface, and it is hand-written.
