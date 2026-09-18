@@ -832,3 +832,31 @@ func TestSpecFirstServiceKeepsTheStalenessCheck(t *testing.T) {
 		t.Error("spec-first CI no longer checks that generated code is current")
 	}
 }
+
+// cache-from/cache-to type=gha require the buildx driver. Without
+// setup-buildx-action the default docker driver cannot export a cache
+// and the build fails with "Cache export is not supported for the docker
+// driver" - on the first push of every service scaffolded this way,
+// after everything else has already passed.
+func TestWorkflowsSetUpBuildxForTheirCache(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		spec bool
+	}{{"spec-first", true}, {"specless", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := testParams()
+			p.Spec = tc.spec
+			wf := r.Artifacts(p).Workflow
+			if !strings.Contains(wf, "cache-to: type=gha") {
+				return // no cache, no buildx needed
+			}
+			if !strings.Contains(wf, "docker/setup-buildx-action") {
+				t.Errorf("uses a gha cache without setting up buildx; the build fails on the docker driver:\n%s", wf)
+			}
+		})
+	}
+}

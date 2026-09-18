@@ -1,3 +1,3 @@
-v1.1.1
+v1.1.2
 
-v1.1.1 check deploy finds the layout render writes
+v1.1.2 workflows set up buildx, which their gha cache requires
