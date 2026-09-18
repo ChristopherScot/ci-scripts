@@ -125,3 +125,74 @@ func TestModulePath(t *testing.T) {
 		})
 	}
 }
+
+// Scaffolded files are handed to the service and never rewritten, which
+// is what makes them editable - and also means a template fix cannot
+// reach a service that already exists. --force is how one is pulled in,
+// and it must touch only what it names.
+func TestForceRewritesOnlyTheNamedFiles(t *testing.T) {
+	dir := t.TempDir()
+	mine := filepath.Join(dir, "main.go")
+	keep := filepath.Join(dir, "server.go")
+	for _, p := range []string{mine, keep} {
+		if err := os.WriteFile(p, []byte("// mine\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	o := initOpts{
+		name: "svc", team: "t", runtimeID: "go-service", port: 3000,
+		owner: "o", localOnly: true, yes: true, skipTidy: true,
+		force: map[string]bool{"main.go": true},
+	}
+	c := config.Defaults()
+	c.Name, c.Team, c.Runtime = o.name, o.team, o.runtimeID
+	c.Image = config.Image{Repository: "ghcr.io/o/svc"}
+	if err := c.Complete(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := runtime.Get(o.runtimeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setupLocal(o, &c, r, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := os.ReadFile(mine)
+	if string(got) == "// mine\n" {
+		t.Error("--force main.go did not rewrite it")
+	}
+	untouched, _ := os.ReadFile(keep)
+	if string(untouched) != "// mine\n" {
+		t.Error("--force main.go rewrote server.go, which it did not name")
+	}
+}
+
+// Without --force nothing existing is touched, which is the default a
+// re-run depends on.
+func TestWithoutForceExistingFilesSurvive(t *testing.T) {
+	dir := t.TempDir()
+	mine := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(mine, []byte("// mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := initOpts{
+		name: "svc", team: "t", runtimeID: "go-service", port: 3000,
+		owner: "o", localOnly: true, yes: true, skipTidy: true,
+	}
+	c := config.Defaults()
+	c.Name, c.Team, c.Runtime = o.name, o.team, o.runtimeID
+	c.Image = config.Image{Repository: "ghcr.io/o/svc"}
+	if err := c.Complete(); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := runtime.Get(o.runtimeID)
+	if err := setupLocal(o, &c, r, dir); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(mine); string(got) != "// mine\n" {
+		t.Error("a re-run without --force clobbered an existing file")
+	}
+}

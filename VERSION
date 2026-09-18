@@ -1,3 +1,3 @@
-v1.1.4
+v1.1.5
 
-v1.1.4 check handles shared path parameters; main.go says what is yours
+v1.1.5 init --force, to pull a template fix into an existing service

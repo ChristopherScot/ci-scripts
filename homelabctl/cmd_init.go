@@ -33,6 +33,10 @@ type initOpts struct {
 	remoteOnly bool
 	dryRun     bool
 	yes        bool
+	// force names files to rewrite even though they exist, from
+	// --force. Scaffolded files are otherwise never rewritten.
+	force map[string]bool
+
 	// skipTidy avoids resolving dependencies, which needs a network. Set
 	// by tests; there is deliberately no flag for it.
 	skipTidy bool
@@ -40,6 +44,7 @@ type initOpts struct {
 
 func initCmd() *cobra.Command {
 	var o initOpts
+	var forceFiles []string
 	cmd := &cobra.Command{
 		Use:   "init <name>",
 		Short: "create a new service or CLI",
@@ -49,6 +54,10 @@ func initCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			o.name = args[0]
+			o.force = map[string]bool{}
+			for _, f := range forceFiles {
+				o.force[f] = true
+			}
 			return runInit(o)
 		},
 	}
@@ -66,6 +75,8 @@ func initCmd() *cobra.Command {
 	f.BoolVar(&o.remoteOnly, "remote-only", false, "create the GitHub repo only; generate no files")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print what would happen and stop")
 	f.BoolVar(&o.yes, "yes", false, "skip the confirmation prompt")
+	f.StringSliceVar(&forceFiles, "force", nil,
+		"rewrite these scaffolded files even though they exist, e.g. --force main.go,Dockerfile")
 
 	// Completing --runtime is the one that saves real typing.
 	cmd.MarkFlagsMutuallyExclusive("local-only", "remote-only")
@@ -171,8 +182,12 @@ func artifactParams(o initOpts, c *config.Config) runtime.Params {
 		Spec:        c.Spec,
 		SpecVersion: runtime.InitialSpecVersion,
 		Owner:       o.owner,
-		Port:        o.port,
-		Image:       c.Image.Repository,
+		// From the config, not the flag. Complete() has already
+		// defaulted it, and a caller that builds opts without a port -
+		// anything working from an existing config.yaml - would
+		// otherwise render EXPOSE 0 and a probe against port 0.
+		Port:  c.Port,
+		Image: c.Image.Repository,
 	}
 	if o.parentRepo != "" {
 		p.PathFilter = filepath.Join("services", o.name)
@@ -356,12 +371,20 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	}
 	a := r.Artifacts(artifactParams(o, c))
 
-	var written, skipped []string
+	var written, skipped, forced []string
 	put := func(path, body string) error {
 		full := filepath.Join(dir, path)
 		if _, err := os.Stat(full); err == nil {
-			skipped = append(skipped, path)
-			return nil
+			// --force names the files to rewrite. Scaffolded files are
+			// handed over to the service and never rewritten otherwise,
+			// which is what makes them editable - and also means a later
+			// template fix cannot reach a service that already exists.
+			// This is how you pull one in, having read the diff first.
+			if !o.force[path] {
+				skipped = append(skipped, path)
+				return nil
+			}
+			forced = append(forced, path)
 		}
 		if err := writeFile(full, body); err != nil {
 			return err
@@ -435,6 +458,14 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// not exist yet - then upgrade, then lock what that settled on.
 	} else if err := run(dir, r.Generate(artifactParams(o, c)), r.Upgrade(), r.Lock()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+
+	if len(forced) > 0 {
+		fmt.Println()
+		fmt.Println("overwritten (--force):")
+		for _, p := range forced {
+			fmt.Println(" ", p)
+		}
 	}
 
 	fmt.Println()
