@@ -42,13 +42,46 @@ type embedded struct {
 	// generated service. A .tmpl suffix means it is rendered with Params;
 	// anything else is copied verbatim.
 	files map[string]string
+
+	// specFiles are entries of files that exist only for a spec-first
+	// service: openapi.yml, the generator config, and everything derived
+	// from them. Keyed by template name, so the map above stays the one
+	// list of what this runtime has.
+	//
+	// A service with Spec false drops these and substitutes specSwaps.
+	specFiles map[string]bool
+
+	// specSwaps replace a template when Spec is false. The three files
+	// that genuinely differ: the handler (hand-written, not generated),
+	// its tests (which otherwise assert generated-router behaviour), and
+	// the workflow's stale-generated-code check.
+	specSwaps map[string]string
 }
 
 func (e embedded) Name() string           { return e.name }
 func (e embedded) SupportsHardened() bool { return e.hardened }
-func (e embedded) Generate() [][]string   { return e.generate }
-func (e embedded) Lock() [][]string       { return e.lock }
-func (e embedded) Upgrade() [][]string    { return e.upgrade }
+
+// Generate is nil without a spec: every command here derives code from
+// openapi.yml, so running them would fail on a missing file rather than
+// produce nothing.
+func (e embedded) Generate(spec bool) [][]string {
+	if !spec {
+		return nil
+	}
+	return e.generate
+}
+
+// SpecFiles are the destination paths that exist only with a spec.
+func (e embedded) SpecFiles() []string {
+	out := make([]string, 0, len(e.specFiles))
+	for src := range e.specFiles {
+		out = append(out, e.files[src])
+	}
+	sort.Strings(out)
+	return out
+}
+func (e embedded) Lock() [][]string    { return e.lock }
+func (e embedded) Upgrade() [][]string { return e.upgrade }
 
 func (e embedded) read(name string) string {
 	b, err := templates.ReadFile(path.Join("templates", e.dir, name))
@@ -100,6 +133,10 @@ func (e embedded) renderFiles(p Params) []File {
 	// behind an intermittent failure.
 	srcs := make([]string, 0, len(e.files))
 	for src := range e.files {
+		// Everything derived from a spec, when there is no spec.
+		if !p.Spec && e.specFiles[src] {
+			continue
+		}
 		srcs = append(srcs, src)
 	}
 	sort.Strings(srcs)
@@ -107,6 +144,11 @@ func (e embedded) renderFiles(p Params) []File {
 	out := make([]File, 0, len(e.files))
 	for _, src := range srcs {
 		dst := e.files[src]
+		if !p.Spec {
+			if swap, ok := e.specSwaps[src]; ok {
+				src = swap
+			}
+		}
 		body := e.read(src)
 		if strings.HasSuffix(src, ".tmpl") {
 			body = e.render(src, p)
