@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
+	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -75,53 +77,62 @@ path "kv/metadata/%s/*" {
 `, base, base, base, base)
 }
 
-// roleArgs is the single definition of the role. vaultCommands prints
-// these and applyVault runs them, so the preview cannot drift from what is
-// actually written.
-func roleArgs(c *config.Config) []string {
-	return []string{
-		"write", "auth/kubernetes/role/" + c.VaultRoleName(),
-		"bound_service_account_names=" + c.ServiceAccountName(),
-		"bound_service_account_namespaces=" + c.Namespace,
-		"policies=" + c.VaultPolicyName(),
-		"ttl=1h",
+// serviceRole is the single definition of the role this service needs.
+// vaultCommands prints it and applyVault writes it, so the preview cannot
+// drift from what actually lands in Vault.
+func serviceRole(c *config.Config) vault.Role {
+	return vault.Role{
+		ServiceAccounts: []string{c.ServiceAccountName()},
+		Namespaces:      []string{c.Namespace},
+		Policies:        []string{c.VaultPolicyName()},
+		TTL:             "1h",
 	}
 }
 
 // vaultCommands renders what --apply would run, so it can be reviewed,
 // pasted, or committed before anything touches Vault.
 func vaultCommands(c *config.Config) string {
-	args := roleArgs(c)
+	r := serviceRole(c)
 	return fmt.Sprintf(`# Vault policy and role for %s, derived from its config.
 # Apply with: homelabctl vault config.yaml --apply
 
 vault policy write %s - <<'POLICY'
 %sPOLICY
 
-vault %s \
-  %s
-`, c.Name, c.VaultPolicyName(), vaultPolicy(c), args[0]+" "+args[1], strings.Join(args[2:], " \\\n  "))
+vault write auth/kubernetes/role/%s \
+  bound_service_account_names=%s \
+  bound_service_account_namespaces=%s \
+  policies=%s \
+  ttl=%s
+`, c.Name, c.VaultPolicyName(), vaultPolicy(c), c.VaultRoleName(),
+		strings.Join(r.ServiceAccounts, ","), strings.Join(r.Namespaces, ","),
+		strings.Join(r.Policies, ","), r.TTL)
 }
 
-// applyVault runs the policy and role writes through the vault-0 pod. Both
-// are replace-on-write, so this is idempotent - running it twice leaves the
+// applyVault writes the policy and role over Vault's HTTP API. Both are
+// replace-on-write, so this is idempotent: running it twice leaves the
 // same state as running it once.
 func applyVault(c *config.Config) error {
 	token, err := vaultToken()
 	if err != nil {
 		return err
 	}
+	cl, err := vault.New(token)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
 
-	if err := vaultExec(token, vaultPolicy(c), "policy", "write", c.VaultPolicyName(), "-"); err != nil {
-		return fmt.Errorf("write policy %s: %w", c.VaultPolicyName(), err)
+	if err := cl.WritePolicy(ctx, c.VaultPolicyName(), vaultPolicy(c)); err != nil {
+		return err
 	}
 	fmt.Printf("wrote policy %s\n", c.VaultPolicyName())
 
-	if err := vaultExec(token, "", roleArgs(c)...); err != nil {
-		return fmt.Errorf("write role %s: %w", c.Name, err)
+	if err := cl.WriteRole(ctx, c.VaultRoleName(), serviceRole(c)); err != nil {
+		return err
 	}
-	fmt.Printf("wrote role auth/kubernetes/role/%s (sa=%s ns=%s)\n",
-		c.VaultRoleName(), c.ServiceAccountName(), c.Namespace)
+	fmt.Printf("wrote role auth/kubernetes/role/%s (sa=%s ns=%s) at %s\n",
+		c.VaultRoleName(), c.ServiceAccountName(), c.Namespace, vault.Address())
 	return nil
 }
 
@@ -143,27 +154,4 @@ func vaultToken() (string, error) {
 		return "", fmt.Errorf("no VAULT_TOKEN set and could not read one from 1Password: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
-}
-
-// vaultExec runs a vault command inside the vault-0 pod. stdin is passed
-// explicitly rather than inferred from a trailing "-" in args: inferring it
-// means a later arg silently leaves stdin empty, and `vault policy write
-// name -` on empty stdin writes an EMPTY POLICY and exits 0 - the service
-// then loses all access with no error anywhere.
-//
-// The token goes in on stdin too, never in argv: argv is readable by any
-// local process via ps, appears in the container's process table, and is
-// recorded in the API server's audit log for pods/exec. This is the
-// cluster's root token.
-func vaultExec(token, stdin string, args ...string) error {
-	script := `read -r VAULT_TOKEN
-export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
-exec vault "$@"`
-
-	full := append([]string{"exec", "-i", "-n", "default", "vault-0", "--",
-		"sh", "-c", script, "sh"}, args...)
-	cmd := exec.Command("kubectl", full...)
-	cmd.Stdin = strings.NewReader(token + "\n" + stdin)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
 }
