@@ -1,3 +1,3 @@
-v1.1.6
+v1.1.7
 
-v1.1.6 init flags that restated config are gone; render is deterministic
+v1.1.7 services publish argocd.json for an ApplicationSet; init asks who owns the repo
