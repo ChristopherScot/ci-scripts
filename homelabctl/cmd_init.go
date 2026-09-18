@@ -433,7 +433,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		// nothing to resolve
 		// Generate first - a lockfile cannot resolve an import that does
 		// not exist yet - then upgrade, then lock what that settled on.
-	} else if err := run(dir, r.Generate(c.Spec), r.Upgrade(), r.Lock()); err != nil {
+	} else if err := run(dir, r.Generate(artifactParams(o, c)), r.Upgrade(), r.Lock()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 

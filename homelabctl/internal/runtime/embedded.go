@@ -64,8 +64,8 @@ func (e embedded) SupportsHardened() bool { return e.hardened }
 // Generate is nil without a spec: every command here derives code from
 // openapi.yml, so running them would fail on a missing file rather than
 // produce nothing.
-func (e embedded) Generate(spec bool) [][]string {
-	if !spec {
+func (e embedded) Generate(p Params) [][]string {
+	if !p.Spec {
 		return nil
 	}
 	return e.generate

@@ -458,7 +458,7 @@ func TestGoServiceIsSpecFirst(t *testing.T) {
 
 	// init runs Generate before Lock, and must: api/ does not exist until
 	// ogen has run, so resolving imports would fail.
-	if len(r.Generate(true)) == 0 {
+	if len(r.Generate(testParams())) == 0 {
 		t.Error("go-service generates nothing, so the spec derives no code")
 	}
 	if len(r.Lock()) == 0 {
@@ -468,7 +468,7 @@ func TestGoServiceIsSpecFirst(t *testing.T) {
 	// regen runs Generate and Lock and CI diffs the result, so neither
 	// may depend on what the world published today. Only Upgrade may.
 	for phase, cmds := range map[string][][]string{
-		"Generate": r.Generate(true),
+		"Generate": r.Generate(testParams()),
 		"Lock":     r.Lock(),
 	} {
 		for _, cmd := range cmds {
@@ -858,5 +858,32 @@ func TestWorkflowsSetUpBuildxForTheirCache(t *testing.T) {
 				t.Errorf("uses a gha cache without setting up buildx; the build fails on the docker driver:\n%s", wf)
 			}
 		})
+	}
+}
+
+// regen passed a bare `false` to Generate, meaning "spec not disabled" -
+// but the parameter meant "spec enabled", so it generated nothing and
+// still reported success. Every `homelabctl regen` was a no-op, and CI's
+// --check could not have caught a stale api/ because nothing regenerated
+// it to compare against.
+//
+// Generate takes Params now, so there is one way to spell it and it
+// cannot be inverted at a call site. This asserts the behaviour rather
+// than the signature.
+func TestGenerateFollowsTheConfigsSpecSetting(t *testing.T) {
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spec := testParams()
+	if len(r.Generate(spec)) == 0 {
+		t.Error("a spec-first service generates nothing; regen would be a no-op")
+	}
+
+	specless := testParams()
+	specless.Spec = false
+	if got := r.Generate(specless); len(got) != 0 {
+		t.Errorf("a specless service would run %v, against a spec it does not have", got)
 	}
 }

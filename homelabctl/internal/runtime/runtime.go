@@ -150,7 +150,12 @@ type Runtime interface {
 	// generated from its OpenAPI spec, say. Run in order, in the service
 	// directory. Nil if a runtime generates nothing, and nil for a
 	// service built without a spec: there is no source to derive from.
-	Generate(spec bool) [][]string
+	//
+	// It takes Params rather than a bare bool because a bool at a call
+	// site reads plausibly in both directions: regen passed `false`
+	// meaning "not disabled" and so generated nothing at all, while
+	// still reporting success.
+	Generate(p Params) [][]string
 
 	// Lock resolves declared dependencies into a lockfile: `go mod tidy`,
 	// `npm install --package-lock-only`. It reads what the manifest

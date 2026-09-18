@@ -1,3 +1,3 @@
-v1.1.2
+v1.1.3
 
-v1.1.2 workflows set up buildx, which their gha cache requires
+v1.1.3 regen actually regenerates, and fails when generation fails
