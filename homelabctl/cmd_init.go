@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
@@ -36,9 +37,10 @@ type initOpts struct {
 	remoteOnly bool
 	dryRun     bool
 	yes        bool
-	// force names files to rewrite even though they exist, from
-	// --force. Scaffolded files are otherwise never rewritten.
-	force map[string]bool
+	// overwrite names scaffolded files to rewrite from the current
+	// templates even though they exist. Keyed on the cleaned path, the
+	// same form put looks up.
+	overwrite map[string]bool
 
 	// skipTidy avoids resolving dependencies, which needs a network. Set
 	// by tests; there is deliberately no flag for it.
@@ -47,7 +49,7 @@ type initOpts struct {
 
 func initCmd() *cobra.Command {
 	var o initOpts
-	var forceFiles []string
+	var overwriteFiles []string
 	cmd := &cobra.Command{
 		Use:   "init <name>",
 		Short: "create a new service or CLI",
@@ -57,9 +59,12 @@ func initCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			o.name = args[0]
-			o.force = map[string]bool{}
-			for _, f := range forceFiles {
-				o.force[f] = true
+			// Cleaned to the same form put looks up. Storing the raw
+			// string meant `--force ./main.go` passed validation and
+			// then silently matched nothing.
+			o.overwrite = make(map[string]bool, len(overwriteFiles))
+			for _, f := range overwriteFiles {
+				o.overwrite[filepath.ToSlash(filepath.Clean(f))] = true
 			}
 			return runInit(o)
 		},
@@ -85,8 +90,13 @@ func initCmd() *cobra.Command {
 	f.BoolVar(&o.remoteOnly, "remote-only", false, "create the GitHub repo only; generate no files")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print what would happen and stop")
 	f.BoolVar(&o.yes, "yes", false, "skip the confirmation prompt")
-	f.StringSliceVar(&forceFiles, "force", nil,
-		"rewrite these scaffolded files even though they exist, e.g. --force main.go,Dockerfile")
+	// Not --force: that reads as "override a safety check", which is what
+	// `render --force` genuinely is. This adopts the current template
+	// into a file init handed over, which is ordinary maintenance.
+	f.StringSliceVar(&overwriteFiles, "overwrite", nil,
+		"rewrite these scaffolded files from the current templates, e.g.\n"+
+			"--overwrite main.go,Dockerfile. Names one file per entry; run with\n"+
+			"an unknown name to see what a service has")
 
 	// Completing --runtime is the one that saves real typing.
 	cmd.MarkFlagsMutuallyExclusive("local-only", "remote-only")
@@ -381,6 +391,77 @@ func setupRemote(o initOpts) (string, error) {
 	return repo, nil
 }
 
+// workflowPath is where CI lands. One function rather than a literal in
+// two places: a monorepo puts it outside the service directory, so a
+// caller guessing ".github/workflows/build.yaml" would name a file that
+// is never written there - which is exactly what --overwrite used to
+// accept and silently ignore.
+func workflowPath(o initOpts) string {
+	if o.parentRepo != "" {
+		// One workflow per service in a monorepo, path-filtered so a push
+		// only rebuilds what changed.
+		return filepath.ToSlash(filepath.Join("..", "..", ".github", "workflows", o.name+".yaml"))
+	}
+	return ".github/workflows/build.yaml"
+}
+
+// overwritable reports whether --overwrite may rewrite a scaffolded
+// file from its template.
+//
+// Almost everything is. init writes api/ through the same put as
+// main.go, calls render.All for manifests and runs the runtime's
+// Generate - so rewriting any of those repeats what init already did
+// with the code that owns them, rather than reaching across a boundary.
+// A command is not an owner; the module is.
+//
+// The exceptions are files whose CONTENT is not the template's to
+// restate:
+//
+//   - config.yaml and openapi.yml are the sources everything else
+//     derives from. A template copy would discard the service.
+//   - go.mod and go.sum belong to the toolchain. `go mod tidy`
+//     maintains them, and a template copy is stale on arrival.
+//   - server.go and its tests are the seam a service replaces on
+//     purpose; its own header says so.
+func overwritable(path string) bool {
+	switch path {
+	case "config.yaml", "openapi.yml", "go.mod", "go.sum",
+		"server.go", "main_test.go":
+		return false
+	}
+	return true
+}
+
+// checkOverwrite rejects a name that is not scaffolding, before anything
+// is written.
+//
+// An unknown name used to be a silent no-op: `--overwrite mian.go`
+// exited 0 having done nothing, and the file appeared under "kept" with
+// no hint it had been asked for.
+func checkOverwrite(want, scaffolding map[string]bool, a runtime.Artifacts, r runtime.Runtime, c *config.Config, o initOpts) error {
+	var unknown []string
+	for p := range want {
+		if !scaffolding[p] {
+			unknown = append(unknown, p)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+
+	names := make([]string, 0, len(scaffolding))
+	for p := range scaffolding {
+		names = append(names, p)
+	}
+	sort.Strings(names)
+
+	return fmt.Errorf("--overwrite %s: not scaffolding for this service.\n"+
+		"manifests come from config.yaml (`homelabctl render`) and generated code\n"+
+		"from openapi.yml (`homelabctl regen`). this service scaffolds:\n  %s",
+		strings.Join(unknown, ", "), strings.Join(names, "\n  "))
+}
+
 // setupLocal writes the service. Existing files are left alone so a re-run
 // does not clobber work in progress.
 func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) error {
@@ -389,20 +470,71 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 	}
 	a := r.Artifacts(artifactParams(c, o.owner, o.parentRepo))
 
-	var written, skipped, forced []string
+	// What --overwrite may name: the files init hands over and never
+	// rewrites. Not everything it writes - api/ and clients/ are regen's,
+	// openapi.yml and config.yaml are sources, go.mod and go.sum are the
+	// toolchain's, and deploy/ is render's. Computed before anything is
+	// written, so a bad name fails before the first file lands.
+	// Rendered here rather than beside the write, so the allowlist can
+	// name them: --overwrite has to know every path init produces before
+	// it writes the first one.
+	var manifests []render.Output
+	if a.Deployable {
+		var err error
+		if manifests, err = render.All(c); err != nil {
+			return err
+		}
+	}
+
+	scaffolding := map[string]bool{}
+	if a.Dockerfile != "" {
+		scaffolding["Dockerfile"] = true
+	}
+	if a.Workflow != "" {
+		// Whichever path it lands at - a monorepo puts it at
+		// ../../.github/workflows/<name>.yaml, which is why this comes
+		// from the same helper setupLocal writes with rather than a
+		// literal a user would have to guess.
+		scaffolding[workflowPath(o)] = true
+	}
+	for _, f := range a.Files {
+		if overwritable(f.Path) {
+			scaffolding[f.Path] = true
+		}
+	}
+	// Manifests too: init renders them with render.All, so --overwrite
+	// deploy/x re-runs the same function render would. It is not a
+	// second implementation, just a second entry point.
+	for _, out := range manifests {
+		scaffolding[filepath.Join("deploy", c.Name, out.Path)] = true
+	}
+	if err := checkOverwrite(o.overwrite, scaffolding, a, r, c, o); err != nil {
+		return err
+	}
+
+	var written, skipped, overwritten []string
+
 	put := func(path, body string) error {
 		full := filepath.Join(dir, path)
 		if _, err := os.Stat(full); err == nil {
-			// --force names the files to rewrite. Scaffolded files are
-			// handed over to the service and never rewritten otherwise,
+			// Scaffolded files are handed over and never rewritten,
 			// which is what makes them editable - and also means a later
 			// template fix cannot reach a service that already exists.
-			// This is how you pull one in, having read the diff first.
-			if !o.force[path] {
+			// --overwrite is how one is pulled in, having read the diff.
+			//
+			// One source for what may be rewritten: the scaffolding set
+			// above, which checkOverwrite has already validated against.
+			// A second bool per call site meant the two could disagree,
+			// and they did - manifests were in the set and refused here.
+			if !o.overwrite[path] {
 				skipped = append(skipped, path)
 				return nil
 			}
-			forced = append(forced, path)
+			overwritten = append(overwritten, path)
+			if err := writeFile(full, body); err != nil {
+				return err
+			}
+			return nil
 		}
 		if err := writeFile(full, body); err != nil {
 			return err
@@ -438,11 +570,8 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		}
 		// Manifests are generated rather than copied, so they reflect
 		// current conventions instead of whatever the template looked like
-		// the day the service was created. `render` regenerates them later.
-		manifests, err := render.All(c)
-		if err != nil {
-			return err
-		}
+		// the day the service was created. `render` regenerates them later
+		// with this same function.
 		for _, out := range manifests {
 			// deploy/<name>/, matching `render --out deploy`. Writing
 			// them flat meant the first render moved every file, and it
@@ -455,12 +584,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 			}
 		}
 	}
-	wfPath := ".github/workflows/build.yaml"
-	if o.parentRepo != "" {
-		// One workflow per service in a monorepo, path-filtered so a push
-		// only rebuilds what changed.
-		wfPath = filepath.Join("..", "..", ".github", "workflows", o.name+".yaml")
-	}
+	wfPath := workflowPath(o)
 	if err := put(wfPath, a.Workflow); err != nil {
 		return err
 	}
@@ -484,10 +608,10 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
 
-	if len(forced) > 0 {
+	if len(overwritten) > 0 {
 		fmt.Println()
-		fmt.Println("overwritten (--force):")
-		for _, p := range forced {
+		fmt.Println("overwritten:")
+		for _, p := range overwritten {
 			fmt.Println(" ", p)
 		}
 	}

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
@@ -137,7 +139,7 @@ func TestModulePath(t *testing.T) {
 // is what makes them editable - and also means a template fix cannot
 // reach a service that already exists. --force is how one is pulled in,
 // and it must touch only what it names.
-func TestForceRewritesOnlyTheNamedFiles(t *testing.T) {
+func TestOverwriteRewritesOnlyTheNamedFiles(t *testing.T) {
 	dir := t.TempDir()
 	mine := filepath.Join(dir, "main.go")
 	keep := filepath.Join(dir, "server.go")
@@ -150,7 +152,7 @@ func TestForceRewritesOnlyTheNamedFiles(t *testing.T) {
 	o := initOpts{
 		name: "svc", runtimeID: "go-service",
 		owner: "o", localOnly: true, yes: true, skipTidy: true,
-		force: map[string]bool{"main.go": true},
+		overwrite: map[string]bool{"main.go": true},
 	}
 	c := config.Defaults()
 	c.Name, c.Team, c.Runtime = o.name, defaultTeam, o.runtimeID
@@ -168,17 +170,17 @@ func TestForceRewritesOnlyTheNamedFiles(t *testing.T) {
 
 	got, _ := os.ReadFile(mine)
 	if string(got) == "// mine\n" {
-		t.Error("--force main.go did not rewrite it")
+		t.Error("--overwrite main.go did not rewrite it")
 	}
 	untouched, _ := os.ReadFile(keep)
 	if string(untouched) != "// mine\n" {
-		t.Error("--force main.go rewrote server.go, which it did not name")
+		t.Error("--overwrite main.go rewrote server.go, which it did not name")
 	}
 }
 
 // Without --force nothing existing is touched, which is the default a
 // re-run depends on.
-func TestWithoutForceExistingFilesSurvive(t *testing.T) {
+func TestWithoutOverwriteExistingFilesSurvive(t *testing.T) {
 	dir := t.TempDir()
 	mine := filepath.Join(dir, "main.go")
 	if err := os.WriteFile(mine, []byte("// mine\n"), 0o644); err != nil {
@@ -200,7 +202,7 @@ func TestWithoutForceExistingFilesSurvive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(mine); string(got) != "// mine\n" {
-		t.Error("a re-run without --force clobbered an existing file")
+		t.Error("a re-run without --overwrite clobbered an existing file")
 	}
 }
 
@@ -238,5 +240,82 @@ func TestInitWritesManifestsWhereRenderDoes(t *testing.T) {
 	// app-of-apps/, not to the service's own directory.
 	if _, err := os.Stat(filepath.Join(dir, "deploy", "_argocd-application.yaml")); err != nil {
 		t.Errorf("deploy/_argocd-application.yaml missing: %v", err)
+	}
+}
+
+// --overwrite may rewrite anything init writes, including files another
+// command also maintains: init renders manifests with render.All and
+// generates api/ with the runtime's Generate, so rewriting either
+// re-runs the code that owns it rather than reimplementing it.
+// Ownership is the module's, not the command's.
+//
+// What it refuses is content a template cannot restate.
+func TestOverwriteRefusesOnlyWhatATemplateCannotRestate(t *testing.T) {
+	run := func(arg string) error {
+		dir := t.TempDir()
+		cmd := initCmd()
+		cmd.SetArgs([]string{"svc", "--local-only", "--yes", "--overwrite", arg})
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		wd, _ := os.Getwd()
+		os.Chdir(dir)
+		defer os.Chdir(wd)
+		return cmd.Execute()
+	}
+
+	for _, arg := range []string{
+		"config.yaml",  // the source everything derives from
+		"openapi.yml",  // the other source
+		"go.mod",       // the toolchain's, maintained by `go mod tidy`
+		"server.go",    // the seam a service replaces on purpose
+		"main_test.go", // its tests, which go with it
+		"mian.go",      // a typo
+	} {
+		if err := run(arg); err == nil {
+			t.Errorf("--overwrite %s was accepted", arg)
+		} else if !strings.Contains(err.Error(), "not scaffolding") {
+			t.Errorf("--overwrite %s: %v", arg, err)
+		}
+	}
+
+	// Accepted, because init writes these with the same functions the
+	// commands that own them use.
+	for _, arg := range []string{"deploy/svc/deployment.yaml", "api/client.go", "main.go"} {
+		if err := run(arg); err != nil && strings.Contains(err.Error(), "not scaffolding") {
+			t.Errorf("--overwrite %s was refused; init writes it with the owning module's code", arg)
+		}
+	}
+}
+
+// The flag's argument is cleaned to the form put looks up. Storing the
+// raw string meant `--overwrite ./main.go` passed validation and then
+// matched nothing: the file was reported as "kept", having been asked
+// for explicitly.
+func TestOverwriteNormalisesItsArgument(t *testing.T) {
+	for _, spelling := range []string{"main.go", "./main.go"} {
+		dir := t.TempDir()
+		mine := filepath.Join(dir, "main.go")
+		if err := os.WriteFile(mine, []byte("// mine\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		o := initOpts{
+			name: "svc", runtimeID: "go-service",
+			owner: "o", localOnly: true, yes: true, skipTidy: true,
+			overwrite: map[string]bool{filepath.ToSlash(filepath.Clean(spelling)): true},
+		}
+		c := config.Defaults()
+		c.Name, c.Team, c.Runtime = o.name, defaultTeam, o.runtimeID
+		c.Image = config.Image{Repository: "ghcr.io/o/svc"}
+		if err := c.Complete(); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := runtime.Get(o.runtimeID)
+		if err := setupLocal(o, &c, r, dir); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(mine); string(got) == "// mine\n" {
+			t.Errorf("--overwrite %s did not rewrite main.go", spelling)
+		}
 	}
 }
