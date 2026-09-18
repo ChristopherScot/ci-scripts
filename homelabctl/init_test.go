@@ -26,7 +26,7 @@ func TestInitGeneratesEveryRuntime(t *testing.T) {
 			t.Cleanup(func() { _ = os.Chdir(wd) })
 
 			o := initOpts{
-				name: "svc", runtimeID: name, team: "t", port: 3000,
+				name: "svc", runtimeID: name,
 				owner: "o", localOnly: true, yes: true,
 				// Dependency resolution needs a network and is covered by
 				// the scaffold's own CI; skip it here.
@@ -71,7 +71,7 @@ func TestScaffoldPassesItsOwnCheck(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(wd) })
 
-	o := initOpts{name: "svc", runtimeID: "go-service", team: "t", port: 3000,
+	o := initOpts{name: "svc", runtimeID: "go-service",
 		owner: "o", localOnly: true, yes: true, skipTidy: true}
 	if err := runInit(o); err != nil {
 		t.Fatalf("runInit = %v", err)
@@ -146,12 +146,12 @@ func TestForceRewritesOnlyTheNamedFiles(t *testing.T) {
 	}
 
 	o := initOpts{
-		name: "svc", team: "t", runtimeID: "go-service", port: 3000,
+		name: "svc", runtimeID: "go-service",
 		owner: "o", localOnly: true, yes: true, skipTidy: true,
 		force: map[string]bool{"main.go": true},
 	}
 	c := config.Defaults()
-	c.Name, c.Team, c.Runtime = o.name, o.team, o.runtimeID
+	c.Name, c.Team, c.Runtime = o.name, defaultTeam, o.runtimeID
 	c.Image = config.Image{Repository: "ghcr.io/o/svc"}
 	if err := c.Complete(); err != nil {
 		t.Fatal(err)
@@ -184,11 +184,11 @@ func TestWithoutForceExistingFilesSurvive(t *testing.T) {
 	}
 
 	o := initOpts{
-		name: "svc", team: "t", runtimeID: "go-service", port: 3000,
+		name: "svc", runtimeID: "go-service",
 		owner: "o", localOnly: true, yes: true, skipTidy: true,
 	}
 	c := config.Defaults()
-	c.Name, c.Team, c.Runtime = o.name, o.team, o.runtimeID
+	c.Name, c.Team, c.Runtime = o.name, defaultTeam, o.runtimeID
 	c.Image = config.Image{Repository: "ghcr.io/o/svc"}
 	if err := c.Complete(); err != nil {
 		t.Fatal(err)

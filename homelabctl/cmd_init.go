@@ -18,13 +18,16 @@ import (
 // init is idempotent: every step checks for what it would create and skips
 // it if present, so a run that fails partway - no network, a rate limit, a
 // wrong flag - can simply be run again rather than needing manual cleanup.
+// defaultTeam stamps every log line until config.yaml says otherwise.
+const defaultTeam = "me-myself-and-i"
+
 type initOpts struct {
-	name       string
+	name string
+
+	// runtimeID picks the template set. Not derivable from a config that
+	// does not exist yet, and it decides which files are written, so it
+	// stays a flag - but `runtime:` in config.yaml wins on a re-run.
 	runtimeID  string
-	team       string
-	host       string
-	public     bool
-	port       int
 	owner      string
 	parentRepo string // create the service inside this existing repo
 	private    bool
@@ -62,15 +65,22 @@ func initCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&o.runtimeID, "runtime", "go-service", "runtime: "+strings.Join(runtime.Names(), ", "))
-	f.StringVar(&o.team, "team", "me-myself-and-i", "owning team")
-	f.StringVar(&o.host, "host", "", "ingress hostname (omit for no ingress)")
-	f.BoolVar(&o.public, "public", false, "route via the internet-facing ingress controller")
-	f.IntVar(&o.port, "port", config.DefaultPort, "port the service listens on")
+	// Kept, unlike --team/--port/--host, which only restated a config
+	// field. This one decides which templates are written, so it has to
+	// be answerable before a config.yaml exists - and `runtime:` in the
+	// config wins on a re-run.
+	f.StringVar(&o.runtimeID, "runtime", "go-service",
+		"runtime: "+strings.Join(runtime.Names(), ", "))
 	f.StringVar(&o.owner, "owner", "christopherscot", "GitHub owner")
 	f.StringVar(&o.parentRepo, "parent-repo", "", "add this service to an existing repo (monorepo) instead of creating one")
 	f.BoolVar(&o.private, "private", false, "create the GitHub repo private (image-updater then needs a registry credential)")
-	f.BoolVar(&o.noSpec, "no-spec", false, "hand-write server.go instead of generating the API from openapi.yml")
+	// The one value-flag that survives. It decides which files are
+	// scaffolded, so it has to be answerable before a config.yaml
+	// exists - and on a re-run the config's `spec:` wins, which is how
+	// a service that started specless later adopts one: flip the field
+	// and run again.
+	f.BoolVar(&o.noSpec, "no-spec", false,
+		"start without an OpenAPI spec; hand-write server.go. Change `spec:` in config.yaml afterwards")
 	f.BoolVar(&o.localOnly, "local-only", false, "generate files only; create nothing on GitHub")
 	f.BoolVar(&o.remoteOnly, "remote-only", false, "create the GitHub repo only; generate no files")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print what would happen and stop")
@@ -267,17 +277,13 @@ func buildConfig(o initOpts) (*config.Config, error) {
 	cfg := config.Defaults()
 	c := &cfg
 	c.Name = o.name
-	c.Team = o.team
+	c.Team = defaultTeam
 	c.Runtime = o.runtimeID
-	c.Port = o.port
 	c.Image = config.Image{Repository: image}
 	c.Spec = !o.noSpec
-	if o.host != "" {
-		c.Ingress = &config.Ingress{
-			Hosts:  []config.IngressHost{{Name: o.host, TLS: config.Certifiable(o.host)}},
-			Public: o.public,
-		}
-	}
+	// No ingress by default. A service that wants one adds `ingress:`
+	// to config.yaml and re-runs render - which is also how it gets more
+	// than one hostname, something a --host flag could never express.
 	return c, c.Complete()
 }
 

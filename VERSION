@@ -1,3 +1,3 @@
-v1.1.5
+v1.1.6
 
-v1.1.5 init --force, to pull a template fix into an existing service
+v1.1.6 drop the init flags that only restated a config field
