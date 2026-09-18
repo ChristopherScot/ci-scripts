@@ -231,11 +231,19 @@ func run(dir string, groups ...[][]string) error {
 // port 0. With the flags out of reach, that particular mistake cannot
 // be made again.
 func artifactParams(c *config.Config, owner, parentRepo string) runtime.Params {
+	// The spec's own version when there is a spec, the initial one when
+	// there is not. Hardcoding the initial version here meant a
+	// regenerated TypeScript client advertised 0.1.0 forever, however
+	// far openapi.yml had moved.
+	specVersion := specVersionIn(".")
+	if specVersion == "" {
+		specVersion = runtime.InitialSpecVersion
+	}
 	p := runtime.Params{
 		Name:        c.Name,
 		Team:        c.Team,
 		Spec:        c.Spec,
-		SpecVersion: runtime.InitialSpecVersion,
+		SpecVersion: specVersion,
 		Owner:       owner,
 		Port:        c.Port,
 		Image:       c.Image.Repository,

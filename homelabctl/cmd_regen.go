@@ -182,14 +182,20 @@ func syncVersions(dir, version string, checkOnly bool) ([]string, error) {
 		}
 	}
 
-	pkgPath := filepath.Join(dir, "package.json")
+	// clients/ts/, not the service root: that is where the generated
+	// TypeScript client lives. It used to be at the root, and when it
+	// moved this path did not - so os.ReadFile failed silently and the
+	// published package advertised whatever version it was created
+	// with, regardless of what the spec said.
+	pkgRel := filepath.Join("clients", "ts", "package.json")
+	pkgPath := filepath.Join(dir, pkgRel)
 	if b, err := os.ReadFile(pkgPath); err == nil {
 		updated, changed, err := setPackageVersion(b, version)
 		if err != nil {
 			return nil, err
 		}
 		if changed {
-			stale = append(stale, "package.json")
+			stale = append(stale, pkgRel)
 			if !checkOnly {
 				if err := os.WriteFile(pkgPath, updated, 0o644); err != nil {
 					return nil, err
@@ -243,4 +249,31 @@ func ownerFromModule(dir string) string {
 		return ""
 	}
 	return ""
+}
+
+// specVersionIn reads info.version from a service's openapi.yml.
+//
+// Templates that state the API version - the TypeScript client's
+// package.json, the Go client's ClientVersion - are rendered from
+// Params, so Params has to carry what the spec says rather than a
+// constant. It used to carry InitialSpecVersion always, which meant a
+// regenerated client advertised 0.1.0 no matter how far the API had
+// moved.
+//
+// Returns "" when there is no spec or no version; callers fall back to
+// InitialSpecVersion, which is right for a service being created.
+func specVersionIn(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "openapi.yml"))
+	if err != nil {
+		return ""
+	}
+	var spec struct {
+		Info struct {
+			Version string `yaml:"version"`
+		} `yaml:"info"`
+	}
+	if err := yaml.Unmarshal(b, &spec); err != nil {
+		return ""
+	}
+	return spec.Info.Version
 }

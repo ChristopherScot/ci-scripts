@@ -21,7 +21,10 @@ func regenFixture(t *testing.T, specVersion, goVersion, pkgVersion string) strin
 	}
 	write("openapi.yml", "openapi: 3.0.3\ninfo:\n  title: t\n  version: "+specVersion+"\npaths: {}\n")
 	write("api/client.go", "package api\n\nconst ClientVersion = \""+goVersion+"\"\n")
-	write("package.json", "{\n  \"name\": \"@o/t-client\",\n  \"version\": \""+pkgVersion+"\"\n}\n")
+	// clients/ts/, where the generated client actually lives. The
+	// fixture used to write this at the service root, which is why a
+	// path that had stopped matching reality still passed.
+	write("clients/ts/package.json", "{\n  \"name\": \"@o/t-client\",\n  \"version\": \""+pkgVersion+"\"\n}\n")
 	return dir
 }
 
@@ -49,7 +52,7 @@ func TestSyncVersionsRewritesBoth(t *testing.T) {
 	if _, err := syncVersions(dir, "0.3.0", false); err != nil {
 		t.Fatalf("syncVersions: %v", err)
 	}
-	for _, f := range []string{"api/client.go", "package.json"} {
+	for _, f := range []string{"api/client.go", "clients/ts/package.json"} {
 		b, err := os.ReadFile(filepath.Join(dir, f))
 		if err != nil {
 			t.Fatal(err)
@@ -125,5 +128,58 @@ func TestOwnerComesFromTheModulePath(t *testing.T) {
 		if got := ownerFromModule(dir); got != tc.want {
 			t.Errorf("ownerFromModule(%q) = %q, want %q", tc.mod, got, tc.want)
 		}
+	}
+}
+
+// The TypeScript client's package.json must carry the SPEC's version,
+// not the version a service was created with.
+//
+// Two separate bugs made it lie, and both were invisible:
+//   - syncVersions looked for package.json at the service root, where it
+//     used to live. os.ReadFile failed silently after the client moved to
+//     clients/ts/, so nothing was ever rewritten.
+//   - artifactParams hardcoded InitialSpecVersion, so regen rendered the
+//     template with 0.1.0 whatever openapi.yml said.
+//
+// The result was an npm package advertising 0.1.0 while containing a
+// 0.2.0 API - a consumer pinning ^0.1.0 would get battle endpoints it
+// had no reason to expect.
+func TestSpecVersionReachesTheTypeScriptClient(t *testing.T) {
+	dir := regenFixture(t, "0.4.0", "0.1.0", "0.1.0")
+
+	stale, err := syncVersions(dir, "0.4.0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawPkg bool
+	for _, f := range stale {
+		if f == filepath.Join("clients", "ts", "package.json") {
+			sawPkg = true
+		}
+	}
+	if !sawPkg {
+		t.Errorf("stale = %v, does not name the TypeScript client's package.json", stale)
+	}
+
+	b, err := os.ReadFile(filepath.Join(dir, "clients", "ts", "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"version": "0.4.0"`) {
+		t.Errorf("client package.json was not synced to the spec:\n%s", b)
+	}
+}
+
+// specVersionIn is what feeds the templates, so a wrong answer here
+// renders a client that reports the wrong API version.
+func TestSpecVersionIn(t *testing.T) {
+	dir := regenFixture(t, "1.2.3", "0.1.0", "0.1.0")
+	if got := specVersionIn(dir); got != "1.2.3" {
+		t.Errorf("specVersionIn = %q, want 1.2.3", got)
+	}
+	// No spec is not an error: a specless service falls back to the
+	// initial version rather than failing to scaffold.
+	if got := specVersionIn(t.TempDir()); got != "" {
+		t.Errorf("specVersionIn with no spec = %q, want empty", got)
 	}
 }

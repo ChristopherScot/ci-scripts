@@ -89,8 +89,11 @@ func TestCLIRuntimesShipSelfUpdate(t *testing.T) {
 				if !strings.Contains(f.Body, `repoOwner = "o"`) {
 					t.Errorf("%s: update.go did not substitute Owner", name)
 				}
-				if !strings.Contains(f.Body, `repoName  = "mytool"`) {
-					t.Errorf("%s: update.go did not substitute Name", name)
+				// The REPO, which for a service with its own repo is
+				// also its name. TestSelfUpdateNamesTheRepoThatHoldsTheReleases
+				// covers the monorepo case, where the two differ.
+				if !strings.Contains(f.Body, `repoName = "mytool"`) {
+					t.Errorf("%s: update.go did not substitute the repo name", name)
 				}
 			case "VERSION":
 				hasVersion = true
