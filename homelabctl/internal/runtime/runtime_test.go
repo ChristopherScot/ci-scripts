@@ -1089,3 +1089,39 @@ func TestWorkflowsCheckManifestsAgainstConfig(t *testing.T) {
 		})
 	}
 }
+
+// Action inputs that name a file resolve from the REPOSITORY ROOT. They
+// are not shell commands, so defaults.run.working-directory does not
+// apply to them - and every runtime got this wrong at once, so a
+// monorepo service failed in CI before running a single test:
+//
+//	go-service    "the specified go version file at: go.mod does not exist"
+//	go-cli        the same
+//	node-service  "Dependencies lock file is not found in .../<repo>"
+//
+// Each failure is at setup time, which is why none of them was caught by
+// the workflow being otherwise correct.
+func TestSetupActionsGetRepoRootPathsInAMonorepo(t *testing.T) {
+	for _, tc := range []struct {
+		runtime string
+		inputs  []string
+	}{
+		{"go-service", []string{"go-version-file: services/svc/go.mod", "cache-dependency-path: services/svc/go.sum"}},
+		{"go-cli", []string{"go-version-file: services/svc/go.mod", "cache-dependency-path: services/svc/go.sum"}},
+		{"node-service", []string{"cache-dependency-path: services/svc/package-lock.json"}},
+	} {
+		r, err := Get(tc.runtime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := testParams()
+		p.PathFilter = "services/svc"
+		wf := r.Artifacts(p).Workflow
+
+		for _, want := range tc.inputs {
+			if !strings.Contains(wf, want) {
+				t.Errorf("%s: workflow missing %q", tc.runtime, want)
+			}
+		}
+	}
+}

@@ -1,7 +1,13 @@
+      # cache-dependency-path is an ACTION INPUT and resolves from the
+      # repository root, not from defaults.run.working-directory. Without
+      # it, a monorepo service fails with "Dependencies lock file is not
+      # found in /home/runner/work/<repo>/<repo>" before installing
+      # anything.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: {{ if .PathFilter }}{{ .PathFilter }}/{{ end }}package-lock.json
 
       - name: Install
         run: npm ci
