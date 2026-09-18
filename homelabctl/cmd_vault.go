@@ -18,18 +18,18 @@ import (
 // the SecretStore references a role that does not exist.
 func vaultCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "vault [config.yaml]",
+		Use:   "vault",
 		Short: "print or apply the Vault policy and role a service needs",
 		Long: "Derives the Vault policy and Kubernetes auth role from the service's\n" +
 			"config. Prints them by default; --apply writes them to Vault.",
-		Args: cobra.MaximumNArgs(1),
+		Args: cobra.NoArgs,
 	}
 	var apply bool
 	cmd.Flags().BoolVar(&apply, "apply", false, "write to Vault instead of printing")
-	cmd.RunE = func(_ *cobra.Command, args []string) error {
-		path := defaultConfigPath
-		if len(args) == 1 {
-			path = args[0]
+	cmd.RunE = func(*cobra.Command, []string) error {
+		path, err := findConfig()
+		if err != nil {
+			return err
 		}
 		c, err := config.Load(path)
 		if err != nil {

@@ -21,16 +21,16 @@ import (
 func diffCmd() *cobra.Command {
 	var against, imageRef, repoURL string
 	cmd := &cobra.Command{
-		Use:   "diff [config.yaml]",
+		Use:   "diff",
 		Short: "show what rendering would change in the GitOps repo",
 		Long: "Renders the config and compares it against the committed manifests,\n" +
 			"so a change can be reviewed before it reaches the cluster.\n\n" +
 			"Exits 1 when they differ, so CI can require them to agree.",
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			path := defaultConfigPath
-			if len(args) == 1 {
-				path = args[0]
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			path, err := findConfig()
+			if err != nil {
+				return err
 			}
 			return runDiff(path, against, imageRef, repoURL)
 		},

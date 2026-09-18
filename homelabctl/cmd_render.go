@@ -35,7 +35,7 @@ type renderOpts struct {
 func renderCmd() *cobra.Command {
 	var o renderOpts
 	cmd := &cobra.Command{
-		Use:   "render [config.yaml]",
+		Use:   "render",
 		Short: "render manifests from a config",
 		Long: "Render every manifest from config.yaml. Run it after changing the\n" +
 			"config; the manifests are derived from it and nothing else.\n\n" +
@@ -43,16 +43,21 @@ func renderCmd() *cobra.Command {
 			"version: it resolves :latest to a digest and writes that into\n" +
 			"kustomization.yaml, so a rendered manifest always names :latest.\n" +
 			"Rendering is therefore deterministic and CI can diff its output.",
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			o.cfgPath = defaultConfigPath
-			if len(args) == 1 {
-				o.cfgPath = args[0]
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			var err error
+			if o.cfgPath, err = findConfig(); err != nil {
+				return err
 			}
 			return runRender(o)
 		},
 	}
-	cmd.Flags().StringVar(&o.out, "out", ".", "directory to write manifests into")
+	// Empty, not ".": the default is the service directory, which is
+	// where the config was found. Defaulting to the working directory
+	// meant running from a subdirectory wrote manifests into it -
+	// api/<name>/deployment.yaml - now that the config is found by
+	// walking up rather than required to be underfoot.
+	cmd.Flags().StringVar(&o.out, "out", "", "directory to write manifests into (default: beside config.yaml)")
 	cmd.Flags().StringVar(&o.appOut, "app-out", "", "also write the Argo Application here")
 	cmd.Flags().StringVar(&o.repoURL, "repo-url", "https://github.com/ChristopherScot/homelab", "repo the Application syncs from")
 	cmd.Flags().StringVar(&o.appPath, "app-path", "", "path within that repo (default: service name)")
@@ -105,7 +110,11 @@ func runRender(o renderOpts) error {
 			strings.Join(unknown, ", "))
 	}
 
-	dir := filepath.Join(o.out, c.Name)
+	out := o.out
+	if out == "" {
+		out = filepath.Dir(o.cfgPath)
+	}
+	dir := filepath.Join(out, c.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

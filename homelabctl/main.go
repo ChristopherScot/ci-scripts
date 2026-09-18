@@ -12,10 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// defaultConfigPath is what commands use when no config file is named, so
-// you never type it while standing in the service directory.
-const defaultConfigPath = "config.yaml"
-
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "homelabctl",

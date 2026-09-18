@@ -23,17 +23,17 @@ import (
 func regenCmd() *cobra.Command {
 	var check bool
 	cmd := &cobra.Command{
-		Use:   "regen [config.yaml]",
+		Use:   "regen",
 		Short: "regenerate clients from the spec and sync their versions",
 		Long: "Regenerate everything derived from openapi.yml: the server\n" +
 			"interface, both clients, and the versions they report.\n\n" +
 			"Run this after editing the spec. With --check it changes nothing\n" +
 			"and fails if anything is out of date, which is what CI wants.",
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			path := defaultConfigPath
-			if len(args) == 1 {
-				path = args[0]
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			path, err := findConfig()
+			if err != nil {
+				return err
 			}
 			return runRegen(path, check)
 		},

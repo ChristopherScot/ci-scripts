@@ -270,7 +270,11 @@ func modulePath(c *config.Config, owner, parentRepo string) string {
 // leaving the two to disagree silently. Re-running init in a directory
 // that already has one is how a half-finished scaffold gets completed.
 func buildConfig(o initOpts) (*config.Config, error) {
-	if existing, err := config.Load(defaultConfigPath); err == nil {
+	// configName, not findConfig: init creates a service HERE, so a
+	// config.yaml in a parent belongs to a different service and
+	// adopting it would scaffold the wrong thing. Every other command
+	// walks up, because they act on a service that already exists.
+	if existing, err := config.Load(configName); err == nil {
 		return existing, nil
 	}
 
