@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -29,12 +31,13 @@ func TestPublicIngressRejectsAuthelia(t *testing.T) {
 }
 
 func TestDefaultsAppliedByValidate(t *testing.T) {
-	c := &Config{Name: "a", Team: "t", Runtime: "go-service"}
+	c := Defaults()
+	c.Name, c.Team, c.Runtime = "a", "t", "go-service"
 	if err := c.Complete(); err != nil {
 		t.Fatalf("Validate() = %v", err)
 	}
-	if c.Namespace != "a" || c.Replicas != 1 || !c.Hardened() {
-		t.Errorf("defaults not applied: ns=%q replicas=%d hardened=%v", c.Namespace, c.Replicas, c.Hardened())
+	if c.Namespace != "a" || c.Replicas != 1 || !c.Hardened {
+		t.Errorf("defaults not applied: ns=%q replicas=%d hardened=%v", c.Namespace, c.Replicas, c.Hardened)
 	}
 }
 
@@ -98,4 +101,113 @@ func TestCompleteAppliesDefaults(t *testing.T) {
 		c.Probes == nil || c.Resources == nil {
 		t.Errorf("Complete() left the Config incomplete: %+v", c)
 	}
+}
+
+// The whole point of decoding over Defaults(): an omitted key keeps its
+// default instead of becoming Go's zero value.
+func TestOmittedFieldsKeepTheirDefaults(t *testing.T) {
+	c := loadYAML(t, "name: a\nteam: t\nruntime: go-service\n")
+
+	if !c.Hardened {
+		t.Error("hardened defaulted to false; an omitted key shipped an unhardened pod")
+	}
+	if !c.Metrics {
+		t.Error("metrics defaulted to false; the pod would never be scraped")
+	}
+	if !c.Spec {
+		t.Error("spec defaulted to false; the service would scaffold specless")
+	}
+	if c.Port != DefaultPort {
+		t.Errorf("port = %d, want %d", c.Port, DefaultPort)
+	}
+	if c.Probes.Path != DefaultProbePath {
+		t.Errorf("probes.path = %q, want %q", c.Probes.Path, DefaultProbePath)
+	}
+	if c.Resources.MemoryLimit != "64Mi" {
+		t.Errorf("resources.memoryLimit = %q, want 64Mi", c.Resources.MemoryLimit)
+	}
+}
+
+// The other half: an explicit false has to win over the default, which is
+// the case a plain bool cannot express without seeding.
+func TestExplicitFalseOverridesTheDefault(t *testing.T) {
+	c := loadYAML(t, "name: a\nteam: t\nruntime: go-service\nhardened: false\nspec: false\n")
+
+	if c.Hardened {
+		t.Error("hardened: false was ignored")
+	}
+	if c.Spec {
+		t.Error("spec: false was ignored")
+	}
+	// Untouched keys still default.
+	if !c.Metrics {
+		t.Error("metrics was disabled by a neighbouring key")
+	}
+}
+
+// A partial nested block must not wipe its siblings' defaults.
+func TestPartialNestedBlockKeepsSiblingDefaults(t *testing.T) {
+	c := loadYAML(t, "name: a\nteam: t\nruntime: go-service\n"+
+		"resources:\n  cpuRequest: 50m\n")
+
+	if c.Resources.CPURequest != "50m" {
+		t.Errorf("cpuRequest = %q, want 50m", c.Resources.CPURequest)
+	}
+	if c.Resources.MemoryRequest != "32Mi" {
+		t.Errorf("memoryRequest = %q, want the default 32Mi", c.Resources.MemoryRequest)
+	}
+}
+
+// The typo that motivated all of this. It must be an error, not silence.
+func TestTypoIsRejected(t *testing.T) {
+	if _, err := loadYAMLErr(t, "name: a\nteam: t\nruntime: go-service\nhardend: false\n"); err == nil {
+		t.Fatal("`hardend: false` was accepted; it would ship an unhardened deploy")
+	}
+}
+
+// Nested keys were NOT checked before: the hand-maintained key list only
+// covered the top level, so `ingress.publik` shipped a LAN-only ingress
+// when the author asked for a public one.
+func TestNestedTypoIsRejected(t *testing.T) {
+	_, err := loadYAMLErr(t, "name: a\nteam: t\nruntime: go-service\n"+
+		"ingress:\n  host: h.example.com\n  publik: true\n")
+	if err == nil {
+		t.Fatal("`ingress.publik` was accepted; the ingress would not be public")
+	}
+	if !strings.Contains(err.Error(), "publik") {
+		t.Errorf("error does not name the offending key: %v", err)
+	}
+}
+
+// An empty file is not a parse error - it is a config that omits
+// everything, and should fail validation by naming what is missing.
+func TestEmptyFileReportsMissingFieldsNotAParseError(t *testing.T) {
+	_, err := loadYAMLErr(t, "")
+	if err == nil {
+		t.Fatal("an empty config validated")
+	}
+	if strings.Contains(err.Error(), "EOF") {
+		t.Errorf("empty file reported as a parse failure: %v", err)
+	}
+	if !strings.Contains(err.Error(), "name is required") {
+		t.Errorf("error does not say what to fix: %v", err)
+	}
+}
+
+func loadYAML(t *testing.T, body string) *Config {
+	t.Helper()
+	c, err := loadYAMLErr(t, body)
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	return c
+}
+
+func loadYAMLErr(t *testing.T, body string) (*Config, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return Load(path)
 }

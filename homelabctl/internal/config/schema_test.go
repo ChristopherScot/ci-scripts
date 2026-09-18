@@ -39,10 +39,4 @@ func TestSchemaCoversConfig(t *testing.T) {
 		}
 	}
 
-	// Fields the decoder handles specially, absent from the struct tags.
-	for _, n := range []string{"hardened", "metrics"} {
-		if _, ok := props[n]; !ok {
-			t.Errorf("Schema is missing %q, which UnmarshalYAML accepts", n)
-		}
-	}
 }

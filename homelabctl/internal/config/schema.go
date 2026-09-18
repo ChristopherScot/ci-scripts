@@ -5,15 +5,16 @@ package config
 // Generated files reference it with a `# yaml-language-server: $schema=`
 // line, matching the convention already used by the arr-stack values
 // files, so editors offer completion and flag unknown keys as you type.
-// That matters here because the YAML decoder silently ignores a key it
-// does not recognise: `hardend: false` is accepted and does nothing, and
-// the result is an unhardened deploy nobody asked for.
+// Load rejects an unrecognised key outright, so this is not the only
+// guard against `hardend: false` - but it is the one that catches it in
+// the editor, before a commit rather than at deploy time.
 //
 // Hand-maintained alongside the Config struct rather than reflected at
-// runtime - the struct has custom unmarshalling and a few fields whose
-// YAML name differs from the field name, so a reflected schema would be
-// wrong in exactly the places that matter. SchemaCoversConfig in the tests
-// fails if a yaml-tagged field is missing here.
+// runtime. Reflection could produce the property names, but not the
+// descriptions, minimums, patterns and enums that make the completions
+// worth having - carrying those in struct tags would mean inventing a
+// dialect to hold prose. TestSchemaCoversConfig fails if a yaml-tagged
+// field is missing here, which is the cheap half of the guarantee.
 const Schema = `{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "homelab service",
@@ -65,6 +66,11 @@ const Schema = `{
       "type": "boolean",
       "default": true,
       "description": "Annotate the pod for Prometheus scraping. The service must serve /metrics."
+    },
+    "spec": {
+      "type": "boolean",
+      "default": true,
+      "description": "Generate the API from openapi.yml. Set false to hand-write server.go instead - no spec, no generated client for consumers to import."
     },
     "image": {
       "type": "object",

@@ -6,10 +6,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -36,6 +37,11 @@ type Config struct {
 	// consumer. go-shlink-redirector is the case that needs it - the repo
 	// carries a `go-` prefix the deployed service does not.
 	Module string `yaml:"module,omitempty"`
+
+	// Spec means this service generates its API from openapi.yml. On by
+	// default; `spec: false` hand-writes server.go instead, which gets no
+	// generated client, so consumers have nothing to import.
+	Spec bool `yaml:"spec"`
 
 	// Kind is the Kubernetes shape this service takes. Language and shape
 	// are independent axes: a Go service and a Go cron job share every
@@ -64,17 +70,18 @@ type Config struct {
 
 	// Hardened applies a non-root, read-only-rootfs securityContext.
 	//
-	// Defaults to ON. A plain bool cannot tell "unset" from "false", so the
-	// tri-state is confined to decoding: UnmarshalYAML flips this to
-	// Disabled only when the YAML says so. Callers building a Config in
-	// code get hardening without having to remember to ask, and render can
-	// read it without a nil check or a validation precondition.
-	HardeningDisabled bool `yaml:"-"`
+	// On by default, via Defaults() rather than the zero value: Load
+	// decodes the YAML over a seeded Config, so an omitted `hardened:`
+	// keeps true and an explicit `hardened: false` overrides it. A
+	// Config built in Go code should start from Defaults() for the same
+	// reason - Complete() re-applies what it can, but the plain zero
+	// value of this field is false.
+	Hardened bool `yaml:"hardened"`
 
-	// MetricsDisabled turns off Prometheus scraping. On by default: alloy
-	// discovers pods by annotation, so a service without them produces no
-	// metrics at all and the absence is silent.
-	MetricsDisabled bool `yaml:"-"`
+	// Metrics annotates the pod for Prometheus scraping. On by default:
+	// alloy discovers pods by annotation, so a service without them
+	// produces no metrics at all and the absence is silent.
+	Metrics bool `yaml:"metrics"`
 
 	// Patches adjust generated manifests without taking ownership of them.
 	// Keyed by resource kind (Deployment, Service, CronJob, Ingress...),
@@ -123,76 +130,6 @@ type Resources struct {
 	MemoryLimit   string `yaml:"memoryLimit,omitempty"`
 }
 
-// UnmarshalYAML defaults Hardened to true. Without this, a config that
-// simply omits the field would decode to false and silently generate an
-// unhardened deployment - the opposite of the intended default.
-// knownTopLevelKeys is every field settable from YAML, including the two
-// the decoder handles specially. Kept beside UnmarshalYAML because that is
-// what a reader checks when a key is rejected.
-var knownTopLevelKeys = map[string]bool{
-	"name": true, "team": true, "runtime": true, "namespace": true,
-	"kind": true, "schedule": true, "timeZone": true,
-	"replicas": true, "port": true, "image": true, "env": true,
-	"secrets": true, "ingress": true, "probes": true, "resources": true,
-	"module":    true,
-	"overrides": true, "patches": true, "hardened": true, "metrics": true,
-}
-
-func (c *Config) UnmarshalYAML(value *yaml.Node) error {
-	// yaml.Decoder.KnownFields does not reach inside a custom
-	// UnmarshalYAML, so an unknown key would decode silently - and
-	// `hardend: false` doing nothing is the exact case the schema exists
-	// to catch. Check the keys directly.
-	var unknown []string
-	for i := 0; i+1 < len(value.Content); i += 2 {
-		if k := value.Content[i].Value; !knownTopLevelKeys[k] {
-			unknown = append(unknown, k)
-		}
-	}
-	if len(unknown) > 0 {
-		sort.Strings(unknown)
-		return fmt.Errorf("unknown field(s): %s", strings.Join(unknown, ", "))
-	}
-
-	type plain Config // avoid recursing into this method
-	var tmp plain
-	if err := value.Decode(&tmp); err != nil {
-		return err
-	}
-	*c = Config(tmp)
-
-	// `hardened:` is absent from the struct tags above precisely so that an
-	// omitted field cannot be read as false. Look for it explicitly.
-	var probe struct {
-		Hardened *bool `yaml:"hardened"`
-	}
-	if err := value.Decode(&probe); err != nil {
-		return err
-	}
-	if probe.Hardened != nil && !*probe.Hardened {
-		c.HardeningDisabled = true
-	}
-
-	var mprobe struct {
-		Metrics *bool `yaml:"metrics"`
-	}
-	if err := value.Decode(&mprobe); err != nil {
-		return err
-	}
-	if mprobe.Metrics != nil && !*mprobe.Metrics {
-		c.MetricsDisabled = true
-	}
-	return nil
-}
-
-// Hardened reports whether the generated deployment should run non-root
-// with a read-only root filesystem.
-func (c *Config) Hardened() bool { return !c.HardeningDisabled }
-
-// Metrics reports whether the pod should be annotated for Prometheus
-// scraping.
-func (c *Config) Metrics() bool { return !c.MetricsDisabled }
-
 // Workload kinds. A service is long-running and gets a Service, probes and
 // a rollout strategy; a cronjob runs to completion on a schedule and gets
 // none of those.
@@ -208,24 +145,70 @@ var validKinds = map[string]bool{KindService: true, KindCronJob: true}
 // all three must agree or a config is valid against one and not the other.
 const DefaultPort = 3000
 
+// DefaultProbePath is where readiness and liveness probes look. The
+// go-service template serves it; a service that serves something else
+// sets `probes.path`.
+const DefaultProbePath = "/healthz"
+
 // IsCronJob reports whether this service runs on a schedule rather than
 // continuously.
 func (c *Config) IsCronJob() bool { return c.Kind == KindCronJob }
 
 var nameRE = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$`)
 
+// Defaults is the Config a config.yaml is decoded ON TOP OF, so an
+// omitted key keeps the value here rather than Go's zero value. That is
+// the whole defaulting mechanism for constant defaults: `hardened:` left
+// out stays true, `hardened: false` overrides it, and no custom
+// UnmarshalYAML or tri-state pointer is involved.
+//
+// It is a function, not a var: it hands out *Probes and *Resources, and a
+// shared var would let one Load mutate the defaults the next one sees.
+//
+// NEVER seed a map or a slice here. yaml.v3 MERGES a decoded map into an
+// existing one rather than replacing it, so a seeded entry survives
+// whatever the file says and cannot be removed from YAML at all. Seeded
+// slices are replaced wholesale, which is a different surprise. Both
+// belong in applyDefaults, where the behaviour is explicit.
+//
+// Port is deliberately absent: it depends on Kind, which is not known
+// until the file is decoded. See applyDefaults.
+func Defaults() Config {
+	return Config{
+		Kind:      KindService,
+		Replicas:  1,
+		Hardened:  true,
+		Metrics:   true,
+		Spec:      true,
+		Probes:    &Probes{Path: DefaultProbePath},
+		Resources: &Resources{CPURequest: "10m", MemoryRequest: "32Mi", MemoryLimit: "64Mi"},
+	}
+}
+
 // Load reads and validates a config, applying defaults so that callers see
 // a fully-populated struct rather than having to re-derive them.
 func Load(path string) (*Config, error) {
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	// KnownFields so a typo is an error rather than silence: `hardend:
-	// false` would otherwise decode cleanly, change nothing, and ship an
-	// unhardened deploy - the exact case the schema was written for.
-	var c Config
-	if err := yaml.Unmarshal(b, &c); err != nil {
+	defer func() { _ = f.Close() }()
+
+	// Decoding over Defaults() is what makes an omitted key keep its
+	// default instead of becoming a zero value.
+	//
+	// KnownFields turns a typo into an error rather than silence:
+	// `hardend: false` would otherwise decode cleanly, change nothing,
+	// and ship an unhardened deploy. This reaches NESTED keys too -
+	// `ingress: {publik: true}` ships a LAN-only ingress when the author
+	// asked for a public one, and that used to pass unnoticed.
+	c := Defaults()
+	d := yaml.NewDecoder(f)
+	d.KnownFields(true)
+	// An empty file is not a parse failure, it is a config that omits
+	// everything - which then fails validation with "name is required"
+	// and the rest, naming what to fix. Decode reports that as io.EOF.
+	if err := d.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if err := c.Complete(); err != nil {
@@ -234,27 +217,39 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
+// applyDefaults covers what Defaults() cannot: values derived from other
+// fields, and the nil pointers a Config built in Go code still arrives
+// with. Constant defaults live in Defaults(), not here.
 func (c *Config) applyDefaults() {
 	if c.Kind == "" {
 		c.Kind = KindService
 	}
+	// Derived from another field, so no literal can express it.
 	if c.Namespace == "" {
 		c.Namespace = c.Name
 	}
 	if c.Replicas == 0 {
 		c.Replicas = 1
 	}
+	// Conditional on Kind, so it cannot be seeded either: a cronjob has
+	// no Service and no port, and render keys off Port == 0 to decide
+	// whether to annotate the pod for scraping. Seeding a port
+	// unconditionally would point Alloy at a port cronjobs never listen
+	// on.
+	//
 	// A service without a port rendered containerPort: 0, targetPort: 0
 	// and probes against port 0: manifests that apply cleanly and describe
-	// a pod that can never pass a readiness check. 3000 is what the schema
-	// and `init` already advertise as the default.
+	// a pod that can never pass a readiness check.
 	if c.Port == 0 && !c.IsCronJob() {
 		c.Port = DefaultPort
 	}
+	// Still needed after Defaults(): an explicit `probes:` with no value
+	// decodes as null and nils the seeded pointer, and a Config built in
+	// Go code never passed through Defaults() at all.
 	if c.Probes == nil {
-		c.Probes = &Probes{Path: "/healthz"}
+		c.Probes = &Probes{Path: DefaultProbePath}
 	} else if c.Probes.Path == "" {
-		c.Probes.Path = "/healthz"
+		c.Probes.Path = DefaultProbePath
 	}
 	if c.Resources == nil {
 		c.Resources = &Resources{}
