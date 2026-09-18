@@ -596,3 +596,97 @@ func mustAllSrc(t *testing.T, c *config.Config, src Source) []Output {
 	}
 	return outs
 }
+
+// A hand-written manifest is copied verbatim and listed as a resource.
+//
+// Verbatim matters: the author wrote a CRD this tool has never heard of,
+// and any reformatting would be this tool having an opinion about a
+// shape it does not understand.
+func TestManifestsAreCopiedAndListed(t *testing.T) {
+	const db = `apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pokedex-db
+spec:
+  instances: 2
+`
+	c := config.Defaults()
+	c.Name = "pokedex"
+	c.Team = "platform"
+	c.Runtime = "go"
+	c.Port = 8080
+	c.Image.Repository = "ghcr.io/example/pokedex"
+	c.Manifests = []string{"db.yaml"}
+
+	outs, err := All(&c, Source{Manifests: map[string]string{"db.yaml": db}})
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+
+	var got string
+	for _, o := range outs {
+		if o.Path == "db.yaml" {
+			got = o.Body
+		}
+	}
+	if got != db {
+		t.Errorf("db.yaml was not copied verbatim:\ngot:\n%s\nwant:\n%s", got, db)
+	}
+
+	// In kustomization.yaml, or Argo never applies it.
+	for _, o := range outs {
+		if o.Path != "kustomization.yaml" {
+			continue
+		}
+		if !strings.Contains(o.Body, "- db.yaml") {
+			t.Errorf("kustomization.yaml does not list db.yaml:\n%s", o.Body)
+		}
+		return
+	}
+	t.Error("no kustomization.yaml rendered")
+}
+
+// A file that is not a Kubernetes manifest has to fail the render.
+//
+// Argo applies everything under resources:, so a stray non-manifest does
+// not fail alone - it fails the SYNC, taking the Deployment and Service
+// with it. Failing here turns a cluster-wide outage into a build error.
+func TestManifestsMustBeKubernetes(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"no apiVersion or kind", "just: some values\nnested:\n  a: 1\n"},
+		{"empty", "\n"},
+		{"not yaml at all", "{{{ this is not yaml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := config.Defaults()
+			c.Name = "pokedex"
+			c.Team = "platform"
+			c.Runtime = "go"
+			c.Port = 8080
+			c.Image.Repository = "ghcr.io/example/pokedex"
+			c.Manifests = []string{"db.yaml"}
+
+			_, err := All(&c, Source{Manifests: map[string]string{"db.yaml": tc.body}})
+			if err == nil {
+				t.Fatal("rendered a file that would fail the whole Argo sync")
+			}
+		})
+	}
+}
+
+// A manifest named in config but absent from the Source is an error, not
+// a silent omission: rendering without it drops the resource from
+// kustomization.yaml, and Argo prunes what is no longer listed.
+func TestMissingManifestIsAnError(t *testing.T) {
+	c := config.Defaults()
+	c.Name = "pokedex"
+	c.Team = "platform"
+	c.Runtime = "go"
+	c.Port = 8080
+	c.Image.Repository = "ghcr.io/example/pokedex"
+	c.Manifests = []string{"db.yaml"}
+
+	if _, err := All(&c, Source{}); err == nil {
+		t.Fatal("a manifest that was never read rendered as if it did not exist")
+	}
+}

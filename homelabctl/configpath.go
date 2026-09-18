@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/render"
 )
 
@@ -120,4 +121,34 @@ func gitSource(cfgPath string) render.Source {
 		RepoURL: url,
 		Path:    path.Join(strings.TrimSpace(string(prefix)), "deploy"),
 	}
+}
+
+// withManifests reads the files named in config.Manifests so render can
+// copy them, keyed by the name the config used.
+//
+// Separate from gitSource, and applied after it, because the two answer
+// different questions and fail independently: gitSource returns a zero
+// Source for a scaffold with no origin remote, and a service's own
+// manifests must still render there. Folding this in would make a
+// missing remote silently drop a database.
+func withManifests(src render.Source, c *config.Config, cfgPath string) (render.Source, error) {
+	if len(c.Manifests) == 0 {
+		return src, nil
+	}
+	dir := filepath.Dir(cfgPath)
+	src.Manifests = make(map[string]string, len(c.Manifests))
+	for _, name := range c.Manifests {
+		// Base name only: these are listed in kustomization.yaml, which
+		// Argo reads from the deploy directory, so a path that climbs out
+		// of it renders a resources: entry Argo cannot resolve.
+		if name != filepath.Base(name) {
+			return src, fmt.Errorf("manifest %q must be a file in the service directory, not a path", name)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return src, fmt.Errorf("manifest %s: %w", name, err)
+		}
+		src.Manifests[name] = string(b)
+	}
+	return src, nil
 }

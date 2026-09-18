@@ -1,4 +1,6 @@
-v1.3.3
+v1.4.0
+
+v1.4.0 manifests: raw Kubernetes resources a service owns, applied with the rest
 
 v1.3.3 the tag check asks the remote, since checkout does not fetch tags
 

@@ -163,6 +163,12 @@ const Schema = `{
       "type": "object",
       "additionalProperties": { "type": "string" },
       "description": "Replace a generated file wholesale. This opts the service OUT of future convention changes for that file - prefer patches. {{ .ImageURL }} is substituted."
+    },
+    "manifests": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Hand-written Kubernetes manifests this service owns, relative to the service directory, copied into the render output and listed in kustomization.yaml. For shapes this tool does not generate: a CNPG Cluster, a PVC, a NetworkPolicy. Argo applies them with prune enabled, so annotate anything holding data with argocd.argoproj.io/sync-options: Prune=false.",
+      "examples": [["db.yaml"]]
     }
   }
 }

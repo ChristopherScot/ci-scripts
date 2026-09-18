@@ -98,6 +98,29 @@ type Config struct {
 	// silently skip it. Reach for `patches` first; this exists for the
 	// cases a merge genuinely cannot express.
 	Overrides map[string]string `yaml:"overrides,omitempty"`
+
+	// Manifests are hand-written Kubernetes resources this service owns,
+	// copied verbatim into the render output and listed in
+	// kustomization.yaml. A CNPG Cluster, a PVC, a NetworkPolicy - shapes
+	// this tool does not generate and should not learn to.
+	//
+	// Paths are relative to the service directory, and the files live
+	// there rather than in deploy/. That keeps deploy/ entirely
+	// generated, which is the invariant `render` plus
+	// `git diff --exit-code` depends on: once the directory mixes
+	// generated and hand-written files, "is this stale?" has no clean
+	// answer.
+	//
+	// Listed explicitly rather than globbed. A glob is less typing and
+	// makes a stray file into cluster state; naming them means a
+	// reviewer sees `+ - db.yaml` in the diff that adds a database.
+	//
+	// These are applied by Argo like anything else in resources:, and
+	// the generated app has prune: true - so a manifest removed from
+	// this list is DELETED from the cluster on the next sync. For
+	// anything holding data, set the Prune=false sync-option annotation
+	// on the resource itself, the way cloudnative-pg-clusters does.
+	Manifests []string `yaml:"manifests,omitempty"`
 }
 
 type Image struct {

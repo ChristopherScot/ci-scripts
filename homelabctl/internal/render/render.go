@@ -61,6 +61,8 @@ import (
 	"strconv"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
 )
 
@@ -157,6 +159,29 @@ func All(c *config.Config, src Source) ([]Output, error) {
 	if c.Ingress != nil {
 		add("ingress.yaml", ingress(c))
 	}
+	// Hand-written manifests, copied verbatim and listed alongside the
+	// generated ones.
+	//
+	// NOT through add(): add() offers a body to patches and overrides,
+	// and neither makes sense here. A patch keyed by kind would apply to
+	// a resource this tool does not generate and cannot reason about,
+	// and an override replacing a file the author already wrote by hand
+	// is just a second copy of it - both would be silent no-ops of
+	// exactly the kind ShadowedPatches exists to catch.
+	for _, name := range c.Manifests {
+		body, ok := src.Manifests[name]
+		if !ok {
+			// A named file that was never read is a typo or a deleted
+			// file; rendering without it would quietly drop a resource
+			// that Argo then prunes from the cluster.
+			return nil, fmt.Errorf("manifest %q is listed in config but was not found", name)
+		}
+		if err := validManifest(name, body); err != nil {
+			return nil, err
+		}
+		out = append(out, Output{Path: name, Body: body})
+	}
+
 	// Last: it lists the files above.
 	add("kustomization.yaml", kustomization(c, out))
 	if err != nil {
@@ -244,6 +269,40 @@ func UnknownPatchKinds(c *config.Config, outs []Output) []string {
 	}
 	sort.Strings(unknown)
 	return unknown
+}
+
+// validManifest rejects a file that would fail the whole Argo sync.
+//
+// kustomization.yaml lists these under resources:, and Argo applies
+// every document it finds there. A file that is not a Kubernetes
+// manifest - a stray README, a values file, a JSON blob - does not fail
+// on its own: it fails the SYNC, taking the Deployment and Service with
+// it. The same reasoning keeps argocd.json out of resourceNames.
+//
+// Checking apiVersion and kind rather than validating against a schema:
+// these resources are by definition kinds this tool does not know, and a
+// CRD it has never heard of is the point. This catches the file that is
+// not a manifest at all, which is the mistake that actually happens.
+func validManifest(name, body string) error {
+	docs := 0
+	for _, doc := range strings.Split(body, "\n---\n") {
+		if strings.TrimSpace(doc) == "" {
+			continue
+		}
+		var node map[string]any
+		if err := yaml.Unmarshal([]byte(doc), &node); err != nil {
+			return fmt.Errorf("manifest %s: %w", name, err)
+		}
+		if node["apiVersion"] == nil || node["kind"] == nil {
+			return fmt.Errorf("manifest %s: document %d has no apiVersion/kind, "+
+				"so applying it would fail the whole sync", name, docs+1)
+		}
+		docs++
+	}
+	if docs == 0 {
+		return fmt.Errorf("manifest %s is empty", name)
+	}
+	return nil
 }
 
 // resourceNames is what kustomization.yaml lists under `resources:`.
@@ -745,6 +804,17 @@ metadata:
 type Source struct {
 	RepoURL string // https://github.com/<owner>/<repo>
 	Path    string // deploy directory, relative to the repo root
+
+	// Manifests holds the contents of each file named in
+	// config.Manifests, keyed by its base name.
+	//
+	// Read by the caller rather than by All, which takes no filesystem
+	// and should not start: init renders a service that does not exist
+	// on disk yet, and the render tests build a Config in Go and expect
+	// the same output every time. Passing the bytes in keeps All a pure
+	// function of its inputs, so "what does this config render to" stays
+	// answerable without a working tree.
+	Manifests map[string]string
 }
 
 // appPath joins the deploy directory to the service's own subdirectory,
