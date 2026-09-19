@@ -1,4 +1,6 @@
-v1.14.0
+v1.14.1
+
+v1.14.1 the generated client's install hint uses a valid npm scope
 
 v1.14.0 one place knows where a service's manifests live
 

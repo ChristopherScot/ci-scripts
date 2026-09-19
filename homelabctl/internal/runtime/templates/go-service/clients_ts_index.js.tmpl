@@ -10,7 +10,7 @@
 // clients behaving the same way is the point - a Node service and a Go
 // service calling the same API should fail the same way.
 //
-//   import createClient from '@{{ .Owner }}/{{ .Name }}-client'
+//   import createClient from '@{{ .NPMScope }}/{{ .Name }}-client'
 //   const client = createClient({ baseUrl: 'https://{{ .Name }}' })
 //   const { data, error } = await client.GET('/')
 import createFetchClient from 'openapi-fetch'
