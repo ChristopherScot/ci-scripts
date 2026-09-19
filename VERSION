@@ -1,4 +1,6 @@
-v1.11.0
+v1.11.1
+
+v1.11.1 status --all covers the repo's services, and names the resource that failed
 
 v1.11.0 homelabctl status reports what Argo made of a service
 

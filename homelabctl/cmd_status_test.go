@@ -78,3 +78,48 @@ func TestShortRev(t *testing.T) {
 		t.Errorf("tag was mangled: %q", got)
 	}
 }
+
+// A hand-written manifest is a RESOURCE inside the service's
+// Application, not an Application of its own.
+//
+// A CNPG Cluster from manifests/ has no Argo app to look up, so without
+// per-resource reporting a failed database reads only as "the service
+// is Degraded" with no clue which resource or why.
+func TestStatusNamesTheFailingResource(t *testing.T) {
+	var a argoApp
+	a.Status.Sync.Status = "OutOfSync"
+	a.Status.Health.Status = "Degraded"
+	a.Status.Resources = append(a.Status.Resources,
+		struct {
+			Kind   string `json:"kind"`
+			Name   string `json:"name"`
+			Status string `json:"status"`
+			Health struct {
+				Status  string `json:"status"`
+				Message string `json:"message"`
+			} `json:"health"`
+		}{Kind: "Deployment", Name: "svc", Status: "Synced"},
+	)
+	bad := a.Status.Resources[0]
+	bad.Kind, bad.Name, bad.Status = "Cluster", "svc-db", "OutOfSync"
+	bad.Health.Status = "Degraded"
+	bad.Health.Message = "instance svc-db-1 is not ready"
+	a.Status.Resources = append(a.Status.Resources, bad)
+
+	var buf bytes.Buffer
+	if err := report(&buf, "svc", a); err == nil {
+		t.Error("a degraded service reported success")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "cluster/svc-db") {
+		t.Errorf("the failing resource was not named:\n%s", out)
+	}
+	if !strings.Contains(out, "instance svc-db-1 is not ready") {
+		t.Errorf("the resource's own message was dropped:\n%s", out)
+	}
+	// Healthy resources stay quiet, or the one line that matters is
+	// buried under every Service and Deployment.
+	if strings.Contains(out, "deployment/svc") {
+		t.Errorf("a healthy resource was listed:\n%s", out)
+	}
+}
