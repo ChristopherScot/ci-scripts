@@ -1812,3 +1812,82 @@ func TestClientHeadersAgreeAcrossTemplates(t *testing.T) {
 		}
 	}
 }
+
+// The image name must not be baked into the workflow.
+//
+// It used to be, written once by `init` from the same field config.yaml
+// holds - and only config.yaml is regenerated. Renaming the image moved
+// the manifests and left CI pushing the old name, with a green build, a
+// clean render and a Synced Argo to say otherwise. The only symptom was
+// ImagePullBackOff, and on a first deploy the service never started.
+//
+// So the workflow asks instead of remembering, and this is the test that
+// keeps it that way: a literal here is the bug coming back.
+func TestWorkflowAsksForTheImageRatherThanBakingItIn(t *testing.T) {
+	for _, id := range Names() {
+		t.Run(id, func(t *testing.T) {
+			r, err := Get(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Both variants: go-service renders workflow.yaml with a
+			// spec and workflow_plain.yaml without, and a literal left
+			// in either one is the bug coming back.
+			for _, spec := range []bool{true, false} {
+				a := r.Artifacts(Params{
+					Name:   "svc",
+					Team:   "t",
+					Module: "github.com/o/svc",
+					Owner:  "o",
+					Image:  "ghcr.io/o/custom-image-name",
+					Port:   3000,
+					Spec:   spec,
+				})
+				if !strings.Contains(a.Workflow, "docker/metadata-action") {
+					t.Skip("this runtime publishes no image")
+				}
+				if strings.Contains(a.Workflow, "ghcr.io/o/custom-image-name") {
+					t.Errorf("spec=%v: the image name is baked into the workflow:\n%s", spec, a.Workflow)
+				}
+				if !strings.Contains(a.Workflow, "homelabctl image") {
+					t.Errorf("spec=%v: the workflow does not ask homelabctl for the image name", spec)
+				}
+				// The metadata-action has to consume the step's output.
+				if !strings.Contains(a.Workflow, "steps.image.outputs.ref") {
+					t.Errorf("spec=%v: metadata-action does not read the resolved image", spec)
+				}
+			}
+		})
+	}
+}
+
+// Every image-publishing workflow has to have the binary in hand before
+// it asks. Ordering is the whole correctness argument for reading the
+// name at CI time, and it is invisible from the step itself.
+func TestWorkflowInstallsHomelabctlBeforeAskingForTheImage(t *testing.T) {
+	for _, id := range Names() {
+		t.Run(id, func(t *testing.T) {
+			r, err := Get(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, spec := range []bool{true, false} {
+				a := r.Artifacts(Params{
+					Name: "svc", Team: "t", Module: "github.com/o/svc",
+					Owner: "o", Image: "ghcr.io/o/svc", Port: 3000, Spec: spec,
+				})
+				ask := strings.Index(a.Workflow, "homelabctl image")
+				if ask < 0 {
+					t.Skip("this runtime publishes no image")
+				}
+				install := strings.Index(a.Workflow, "homelabctl_linux_amd64.tar.gz")
+				if install < 0 {
+					t.Fatalf("spec=%v: the workflow asks for the image but never installs homelabctl", spec)
+				}
+				if install > ask {
+					t.Errorf("spec=%v: the workflow asks for the image before installing homelabctl", spec)
+				}
+			}
+		})
+	}
+}

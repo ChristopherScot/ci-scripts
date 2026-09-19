@@ -1,4 +1,6 @@
-v1.17.0
+v1.18.0
+
+v1.18.0 CI asks for the image name instead of keeping its own copy
 
 v1.17.0 cronjob pods were missing their labels and dropping their scrape annotations
 
