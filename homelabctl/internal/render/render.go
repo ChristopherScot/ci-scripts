@@ -904,8 +904,18 @@ metadata:
 		for i, h := range hosts {
 			names[i] = h.Name
 		}
+		// Keyed on the INGRESS name, not the service name.
+		//
+		// A service with both a LAN host and a public one renders two
+		// Ingresses, and c.Name gave them the same secret for different
+		// host sets - cert-manager would reissue for one, overwrite the
+		// other's certificate, and repeat. The Ingress name is already
+		// unique per document, so this follows it.
+		//
+		// A service with a single Ingress is unaffected: its Ingress is
+		// named after the service, so the secret name does not change.
 		fmt.Fprintf(&b, "  tls:\n    - hosts: [%s]\n      secretName: %s-tls\n",
-			strings.Join(names, ", "), c.Name)
+			strings.Join(names, ", "), name)
 	}
 	b.WriteString("  rules:\n")
 	// The rule path. "/" is the ordinary case and stays a plain Prefix

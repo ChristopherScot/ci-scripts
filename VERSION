@@ -1,4 +1,6 @@
-v1.16.0
+v1.16.1
+
+v1.16.1 each Ingress gets its own TLS secret
 
 v1.16.0 public is per host, so a service can hold a LAN name and a WAN one
 

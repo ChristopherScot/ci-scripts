@@ -975,3 +975,50 @@ func TestPublicIngressIsAlwaysNamedPublic(t *testing.T) {
 		}
 	}
 }
+
+// Two Ingresses must not claim the same TLS secret.
+//
+// The secret was named after the SERVICE, so a service with a LAN host
+// and a public one rendered two Ingresses pointing at one secret for
+// different host sets. cert-manager would issue for one, overwrite the
+// other's certificate, and keep going - a renewal loop that presents
+// the wrong certificate half the time.
+func TestEachIngressGetsItsOwnTLSSecret(t *testing.T) {
+	yes := true
+	c := config.Defaults()
+	c.Name = "svc"
+	c.Team = "platform"
+	c.Runtime = "go"
+	c.Port = 8080
+	c.Image.Repository = "ghcr.io/example/svc"
+	c.Ingress = &config.Ingress{Hosts: []config.IngressHost{
+		{Name: "svc.home.example.com", TLS: true},
+		{Name: "svc.example.com", TLS: true, Public: &yes},
+	}}
+
+	outs, err := All(&c, Source{})
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	var body string
+	for _, o := range outs {
+		if o.Path == "ingress.yaml" {
+			body = o.Body
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, line := range strings.Split(body, "\n") {
+		_, secret, ok := strings.Cut(strings.TrimSpace(line), "secretName: ")
+		if !ok {
+			continue
+		}
+		if seen[secret] {
+			t.Errorf("two Ingresses share the TLS secret %q; cert-manager would fight over it", secret)
+		}
+		seen[secret] = true
+	}
+	if len(seen) != 2 {
+		t.Errorf("expected two TLS secrets, got %d: %v", len(seen), seen)
+	}
+}
