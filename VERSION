@@ -1,5 +1,6 @@
-v1.18.2
+v1.18.3
 
+v1.18.3 env can read a key from a Secret; patches that strip a container are refused; pods restart on secret rotation
 v1.18.2 the client floor reaches node services too
 
 v1.18.1 a minimum client version, refused with 410 rather than served
