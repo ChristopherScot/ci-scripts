@@ -560,20 +560,74 @@ func serviceAccountName(c *config.Config) string {
 	return fmt.Sprintf("      serviceAccountName: %s\n", sa)
 }
 
-// metricsAnnotations wires the pod into the cluster's metrics collection.
-// Alloy discovers scrape targets by annotation - nothing is collected
-// without these, and the absence is silent.
+// metricsAnnotations is the pod's annotation block: metrics discovery,
+// and the secrets a restart should follow.
+//
+// One function because they share a block. Emitting a second
+// `annotations:` key would be a duplicate mapping key - YAML keeps the
+// last and silently drops the first, so whichever came first would
+// vanish.
 func metricsAnnotations(c *config.Config) string {
+	var lines []string
+
+	// Alloy discovers scrape targets by annotation - nothing is
+	// collected without these, and the absence is silent.
+	//
 	// No port means nothing to scrape. A cronjob has no Service and no
 	// port, and annotating one anyway pointed Alloy at port 0 forever.
-	if !c.Metrics || c.Port == 0 {
+	if c.Metrics && c.Port != 0 {
+		lines = append(lines,
+			`        k8s.grafana.com/scrape: "true"`,
+			`        k8s.grafana.com/metrics.path: "/metrics"`,
+			fmt.Sprintf(`        k8s.grafana.com/metrics.portNumber: "%d"`, c.Port))
+	}
+
+	// An env var is resolved by the kubelet when the container starts
+	// and never again - whether it came from `env:` or `envFrom:`. So
+	// a rotated credential does not reach a running pod at all, and
+	// without this the failure is "the password changed and the pod is
+	// still using the old one", which nothing reports.
+	//
+	// Named rather than `reloader.stakater.com/auto: "true"`: auto
+	// discovers the secrets itself, and would also roll the pod on an
+	// ESO refresh that rewrote identical data. The config already
+	// knows exactly which secrets matter.
+	if names := reloadSecrets(c); len(names) > 0 {
+		lines = append(lines, fmt.Sprintf(
+			`        reloader.stakater.com/secret-reload-on-change: %q`,
+			strings.Join(names, ",")))
+	}
+
+	if len(lines) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(`      annotations:
-        k8s.grafana.com/scrape: "true"
-        k8s.grafana.com/metrics.path: "/metrics"
-        k8s.grafana.com/metrics.portNumber: "%d"
-`, c.Port)
+	return "      annotations:\n" + strings.Join(lines, "\n") + "\n"
+}
+
+// reloadSecrets is every Secret this pod reads, sorted and deduplicated.
+//
+// Both sources count: the one ESO syncs for `secrets:`, and any named
+// by an `env:` secretKeyRef - an operator-minted credential rotates
+// too, and is in fact the more likely of the two to.
+func reloadSecrets(c *config.Config) []string {
+	seen := map[string]bool{}
+	if c.Secrets != nil {
+		seen[c.SecretName()] = true
+	}
+	for _, v := range c.Env {
+		if v.Secret != nil {
+			seen[v.Secret.Name] = true
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // cronJob renders a scheduled workload. It shares the container spec with
