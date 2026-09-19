@@ -24,11 +24,11 @@ func init() {
 		// older than what is released.
 		upgrade: [][]string{{"go", "get", "-u", "./..."}},
 		files: map[string]tmpl{
-			"go.mod.tmpl":       {dst: "go.mod"},
-			"main.go.tmpl":      {dst: "main.go"},
-			"main_test.go.tmpl": {dst: "main_test.go", plain: "main_test_plain.go.tmpl"},
-			"server.go.tmpl":    {dst: "server.go", plain: "server_plain.go.tmpl"},
-			"README.md.tmpl":    {dst: "README.md"},
+			"go.mod.tmpl":           {dst: "go.mod"},
+			"main.go.tmpl":          {dst: "main.go"},
+			"scaffold_test.go.tmpl": {dst: "scaffold_test.go", plain: "scaffold_test_plain.go.tmpl"},
+			"server.go.tmpl":        {dst: "server.go", plain: "server_plain.go.tmpl"},
+			"README.md.tmpl":        {dst: "README.md"},
 
 			// Everything openapi.yml feeds. Dropped for a service built
 			// without one, which has no spec to derive them from.
@@ -72,13 +72,13 @@ func init() {
 		lock:    [][]string{{"go", "mod", "tidy"}},
 		upgrade: [][]string{{"go", "get", "-u", "./..."}},
 		files: map[string]tmpl{
-			"go.mod.tmpl":        {dst: "go.mod"},
-			"main.go.tmpl":       {dst: "main.go"},
-			"update.go.tmpl":     {dst: "update.go"},
-			"main_test.go.tmpl":  {dst: "main_test.go"},
-			"completion.go.tmpl": {dst: "completion.go"},
-			"VERSION.tmpl":       {dst: "VERSION"},
-			"gitignore.tmpl":     {dst: ".gitignore"},
+			"go.mod.tmpl":           {dst: "go.mod"},
+			"main.go.tmpl":          {dst: "main.go"},
+			"update.go.tmpl":        {dst: "update.go"},
+			"scaffold_test.go.tmpl": {dst: "scaffold_test.go"},
+			"completion.go.tmpl":    {dst: "completion.go"},
+			"VERSION.tmpl":          {dst: "VERSION"},
+			"gitignore.tmpl":        {dst: ".gitignore"},
 		},
 	})
 
@@ -93,14 +93,14 @@ func init() {
 		lock:    [][]string{{"go", "mod", "tidy"}},
 		upgrade: [][]string{{"go", "get", "-u", "./..."}},
 		files: map[string]tmpl{
-			"go.mod.tmpl":        {dst: "go.mod"},
-			"main.go.tmpl":       {dst: "main.go"},
-			"model.go.tmpl":      {dst: "model.go"},
-			"update.go.tmpl":     {dst: "update.go"},
-			"main_test.go.tmpl":  {dst: "main_test.go"},
-			"completion.go.tmpl": {dst: "completion.go"},
-			"VERSION.tmpl":       {dst: "VERSION"},
-			"gitignore.tmpl":     {dst: ".gitignore"},
+			"go.mod.tmpl":           {dst: "go.mod"},
+			"main.go.tmpl":          {dst: "main.go"},
+			"model.go.tmpl":         {dst: "model.go"},
+			"update.go.tmpl":        {dst: "update.go"},
+			"scaffold_test.go.tmpl": {dst: "scaffold_test.go"},
+			"completion.go.tmpl":    {dst: "completion.go"},
+			"VERSION.tmpl":          {dst: "VERSION"},
+			"gitignore.tmpl":        {dst: ".gitignore"},
 		},
 	})
 

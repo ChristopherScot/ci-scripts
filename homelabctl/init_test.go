@@ -283,12 +283,11 @@ func TestOverwriteRefusesOnlyWhatATemplateCannotRestate(t *testing.T) {
 	}
 
 	for _, arg := range []string{
-		"config.yaml",  // the source everything derives from
-		"openapi.yml",  // the other source
-		"go.mod",       // the toolchain's, maintained by `go mod tidy`
-		"server.go",    // the seam a service replaces on purpose
-		"main_test.go", // its tests, which go with it
-		"mian.go",      // a typo
+		"config.yaml", // the source everything derives from
+		"openapi.yml", // the other source
+		"go.mod",      // the toolchain's, maintained by `go mod tidy`
+		"server.go",   // the seam a service replaces on purpose
+		"mian.go",     // a typo
 	} {
 		if err := run(arg); err == nil {
 			t.Errorf("--overwrite %s was accepted", arg)
@@ -578,5 +577,19 @@ func TestParentRepoFallsBackToTheDirectory(t *testing.T) {
 	}
 	if !repoNameMatches(dir, filepath.Base(dir)) {
 		t.Error("a remoteless repo did not fall back to its directory name")
+	}
+}
+
+// scaffold_test.go must stay overwritable.
+//
+// It is the delivery path for a fix to the scaffolded tests: without
+// it, a service scaffolded last month never receives one, which is the
+// gap that left a live service's server.go without client logging for
+// three versions. A service's OWN tests belong in a file it names, and
+// nothing here touches those.
+func TestScaffoldTestsCanBeOverwritten(t *testing.T) {
+	if !overwritable("scaffold_test.go") {
+		t.Error("scaffold_test.go is refused, so a fix to the scaffolded tests " +
+			"cannot reach a service that already exists")
 	}
 }

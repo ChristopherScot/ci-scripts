@@ -598,6 +598,23 @@ func containerBody(c *config.Config, pad string) string {
 	if c.Port != 0 {
 		env["PORT"] = strconv.Itoa(c.Port)
 	}
+	// The client floor, delivered at RUNTIME rather than compiled in.
+	//
+	// Raising it is the response to a client actively causing harm - a
+	// browser tab polling a deleted battle 46,000 times, say - and at
+	// that moment the useful fix is a config.yaml edit and a restart,
+	// not a code change, a build and a deploy.
+	//
+	// It also keeps the floor out of server.go, which the template
+	// hands over and never rewrites: a value scaffolded in there drifts
+	// from config.yaml the moment either changes, which is exactly the
+	// staleness the image name used to have.
+	//
+	// Omitted at the default, because a floor every real version
+	// clears is a line in the manifest that says nothing.
+	if c.MinVersion != "" && c.MinVersion != config.DefaultMinVersion {
+		env["MIN_VERSION"] = c.MinVersion
+	}
 	for k, v := range c.Env {
 		env[k] = v
 	}

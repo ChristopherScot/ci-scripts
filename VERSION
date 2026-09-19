@@ -1,4 +1,6 @@
-v1.18.0
+v1.18.1
+
+v1.18.1 a minimum client version, refused with 410 rather than served
 
 v1.18.0 CI asks for the image name instead of keeping its own copy
 

@@ -28,13 +28,16 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ogen-go/ogen/middleware"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/mod/semver"
 
 	"{{ .Module }}/api"
 )
@@ -146,6 +149,44 @@ const (
 	ClientVersionHeader = "Client-Version"
 )
 
+// minVersion is the oldest client this service answers, from
+// MIN_VERSION in the environment. Empty means no floor, which is the
+// normal state: the check is inert until someone raises it.
+//
+// Read at startup rather than compiled in, so raising the floor is a
+// config.yaml edit and a restart. That matters because the floor is
+// raised in response to a client actively causing harm, and a rebuild
+// is the slowest possible way to respond to that.
+var minVersion = os.Getenv("MIN_VERSION")
+
+// tooOld reports whether a caller is below the floor.
+//
+// Both sides are compared as semver with the leading v that
+// golang.org/x/mod/semver requires. Clients report a BARE version -
+// openapi.yml's info.version for Go, package.json's for TypeScript,
+// and npm forbids the prefix - so the v is added here rather than
+// expected on the wire. The VERSION files that do carry one drive
+// release tags and never reach this header.
+//
+// FAILS OPEN on anything it cannot parse, and on a caller that sends no
+// version at all. Those are curl, a probe, a script - not the stale
+// client this exists to stop - and refusing them would break far more
+// than it fixed.
+func tooOld(r *http.Request) bool {
+	if minVersion == "" {
+		return false
+	}
+	got := r.Header.Get(ClientVersionHeader)
+	if got == "" {
+		return false
+	}
+	got, floor := "v"+got, "v"+strings.TrimPrefix(minVersion, "v")
+	if !semver.IsValid(got) || !semver.IsValid(floor) {
+		return false
+	}
+	return semver.Compare(got, floor) < 0
+}
+
 // clientName is which service sent a request.
 //
 // "unknown" when the caller sends no header, rather than sniffed from
@@ -170,6 +211,33 @@ func handler() (http.Handler, error) {
 	// The deployment annotates this pod for scraping here; without this
 	// handler those annotations point at a 404.
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/", srv)
+	mux.Handle("/", refuseOldClients(srv))
 	return mux, nil
+}
+
+// refuseOldClients turns away a caller below the floor before the
+// generated router sees it.
+//
+// Wrapped here rather than inside observe because ogen middleware
+// returns (Response, error), and an error there routes through
+// NewError and becomes a 500 - the wrong status, logged as a handler
+// failure. At the http.Handler seam a plain 410 is just a write.
+//
+// /metrics is deliberately outside this: it is the platform's endpoint,
+// scraped by Alloy, and has nothing to do with the service's clients.
+func refuseOldClients(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tooOld(r) {
+			// 410 Gone, not 429: the generated clients retry 429 and
+			// 5xx and nothing else, so 410 stops them dead. A status
+			// they retried would turn one stuck client into a storm.
+			slog.Warn("refusing a client below the floor",
+				"client", clientName(r),
+				"client_version", r.Header.Get(ClientVersionHeader),
+				"min_version", minVersion)
+			http.Error(w, "this client is too old; reload or upgrade", http.StatusGone)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

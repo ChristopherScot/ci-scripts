@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 
+	"golang.org/x/mod/semver"
 	"gopkg.in/yaml.v3"
 )
 
@@ -84,6 +85,36 @@ type Config struct {
 	// alloy discovers pods by annotation, so a service without them
 	// produces no metrics at all and the absence is silent.
 	Metrics bool `yaml:"metrics"`
+
+	// MinVersion is the oldest client this service still answers.
+	//
+	// A client reports its own version in Client-Version; one below this
+	// gets 410 Gone instead of being served. Set it by hand, and expect
+	// it to trail real releases by a long way: it is not "the current
+	// version", it is "older than this is actively harmful".
+	//
+	// It exists because a client that is merely OLD is usually fine,
+	// while a client with a specific bug is not. A browser tab left open
+	// on a deleted battle polled once a second for thirteen hours - some
+	// 46,000 requests - because the code in that tab predated the fix
+	// that stops after five misses. Nothing could reach it: the fix
+	// shipped, but the tab was never reloaded, and a deploy cannot
+	// reach code already running in someone's browser.
+	//
+	// Deliberately NOT tied to the API version. The two move
+	// independently: the commit that fixed that poll loop touched only
+	// the browser script and bumped no API version at all, so a floor
+	// keyed to openapi.yml would not have seen it.
+	//
+	// Deliberately NOT "refuse anything older than the server". The
+	// server's own build says nothing about which client code a caller
+	// holds, and during a rolling deploy two pods serve different
+	// builds at once - so "newer than me" would refuse callers at
+	// random for the length of every rollout.
+	//
+	// Defaults to 0.0.1, which every real version is at or above, so
+	// the check is inert until someone deliberately raises it.
+	MinVersion string `yaml:"minVersion,omitempty"`
 
 	// Patches adjust generated manifests without taking ownership of them.
 	// Keyed by resource kind (Deployment, Service, CronJob, Ingress...),
@@ -491,6 +522,13 @@ type Resources struct {
 const (
 	KindService = "service"
 	KindCronJob = "cronjob"
+
+	// DefaultMinVersion is what an explicitly-inert floor looks like:
+	// low enough that every real client clears it. Nothing seeds it -
+	// an absent minVersion already means "no floor" - but render omits
+	// a floor set to this, so writing it by hand is a no-op rather
+	// than a surprise.
+	DefaultMinVersion = "v0.0.1"
 )
 
 var validKinds = map[string]bool{KindService: true, KindCronJob: true}
@@ -535,7 +573,12 @@ func Defaults() Config {
 		Hardened: true,
 		Metrics:  true,
 		Spec:     true,
-		Probes:   &Probes{Path: DefaultProbePath},
+		// MinVersion deliberately absent: empty IS the default, and it
+		// means "no floor". Seeding it with a real version would write
+		// `minVersion: v0.0.1` into every scaffolded config - a line
+		// that reads like a decision, changes nothing, and invites
+		// someone to edit the wrong one of two entries.
+		Probes: &Probes{Path: DefaultProbePath},
 		// Memory deliberately left empty: it depends on the runtime,
 		// which is not known here, and Complete() fills it. Setting it
 		// here made the field non-empty, so the runtime-aware default
@@ -718,6 +761,16 @@ func (c Config) Validate() error {
 	}
 	if c.Runtime == "" {
 		add("runtime is required; see `homelabctl init --help` for the registered runtimes")
+	}
+	// A floor nothing can parse is a floor that refuses nothing, and the
+	// failure is silent: the service keeps serving every client and the
+	// setting reads as if it were in force.
+	// Canonical means all three parts: semver.IsValid accepts "v0.3",
+	// but a floor written that way is ambiguous about the patch level
+	// it means, and it is compared against clients that always send
+	// three.
+	if c.MinVersion != "" && semver.Canonical(c.MinVersion) != c.MinVersion {
+		add("minVersion %q is not a full semantic version; write all three parts with the leading v, as `v0.3.0`", c.MinVersion)
 	}
 	if c.Secrets != nil {
 		if c.Secrets.VaultPath == "" {

@@ -1209,3 +1209,40 @@ func TestCronJobKeepsItsOwnEnvVars(t *testing.T) {
 		t.Errorf("a cronjob lost its env vars:\n%s", body)
 	}
 }
+
+// The client floor reaches the pod as MIN_VERSION, so raising it is a
+// config edit and a restart rather than a rebuild. That matters because
+// the floor is raised in response to a client actively causing harm.
+func TestMinVersionReachesThePodAsAnEnvVar(t *testing.T) {
+	c := base()
+	c.MinVersion = "v0.3.0"
+
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if o.Path == "deployment.yaml" {
+			body = o.Body
+		}
+	}
+	if !strings.Contains(body, "name: MIN_VERSION") || !strings.Contains(body, `value: "v0.3.0"`) {
+		t.Errorf("MIN_VERSION did not reach the manifest:\n%s", body)
+	}
+}
+
+// A floor every real client clears is a line that says nothing. Absent
+// and explicitly-inert both render nothing.
+func TestAnInertFloorIsNotWrittenToTheManifest(t *testing.T) {
+	for _, v := range []string{"", config.DefaultMinVersion} {
+		c := base()
+		c.MinVersion = v
+
+		var body string
+		for _, o := range mustAll(t, mustConfig(t, c)) {
+			if o.Path == "deployment.yaml" {
+				body = o.Body
+			}
+		}
+		if strings.Contains(body, "MIN_VERSION") {
+			t.Errorf("minVersion %q was written to the manifest:\n%s", v, body)
+		}
+	}
+}

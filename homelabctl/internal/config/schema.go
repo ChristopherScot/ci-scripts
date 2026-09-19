@@ -84,6 +84,11 @@ const Schema = `{
       "additionalProperties": { "type": "string" },
       "description": "Plain environment variables. Secrets belong under 'secrets'."
     },
+    "minVersion": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Oldest client version this service still answers. A client reporting a Client-Version below this gets 410 Gone. Written with the leading v, as v0.3.0. Hand-set and expected to trail real releases by a long way - it means 'older than this is actively harmful', not 'the current version'. Defaults to v0.0.1, which every real version clears, so the check is inert until raised."
+    },
     "secrets": {
       "type": "object",
       "required": ["vaultPath", "keys"],

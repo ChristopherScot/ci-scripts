@@ -572,12 +572,21 @@ func publishWorkflowPath(o initOpts) string {
 //     derives from. A template copy would discard the service.
 //   - go.mod and go.sum belong to the toolchain. `go mod tidy`
 //     maintains them, and a template copy is stale on arrival.
-//   - server.go and its tests are the seam a service replaces on
-//     purpose; its own header says so.
+//   - server.go is the seam a service replaces on purpose; its own
+//     header says so.
+//
+// scaffold_test.go is deliberately NOT in that list. It is named for
+// where it came from rather than for what it tests, because it is the
+// scaffold's rather than yours: a service's own tests belong in a file
+// it names, which nothing here ever touches. Keeping it overwritable is
+// what lets a fix to those tests reach a service that already exists -
+// the alternative is the gap that left a live service's server.go
+// without client logging for three versions, because nothing could
+// deliver it.
 func overwritable(path string) bool {
 	switch path {
 	case "config.yaml", "openapi.yml", "go.mod", "go.sum",
-		"server.go", "main_test.go":
+		"server.go":
 		return false
 	}
 	return true

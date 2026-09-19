@@ -492,3 +492,36 @@ func TestDuplicateSecretKeyEnvIsRejected(t *testing.T) {
 		t.Fatal("a duplicated environment variable was accepted")
 	}
 }
+
+// A floor nothing can parse refuses nothing, and the failure is silent:
+// the service keeps serving every client while the setting reads as if
+// it were in force.
+func TestMinVersionMustBeSemver(t *testing.T) {
+	for _, bad := range []string{"0.3.0", "latest", "v0.3", "banana", "v0.3.0-"} {
+		c := Defaults()
+		c.Name, c.Team, c.Runtime = "svc", "t", "go-service"
+		c.MinVersion = bad
+		if err := c.Complete(); err == nil {
+			t.Errorf("minVersion %q was accepted", bad)
+		}
+	}
+}
+
+// One spelling, with the v, matching the VERSION files.
+func TestMinVersionAcceptsAVPrefixedSemver(t *testing.T) {
+	c := Defaults()
+	c.Name, c.Team, c.Runtime = "svc", "t", "go-service"
+	c.MinVersion = "v0.3.0"
+	if err := c.Complete(); err != nil {
+		t.Errorf("v0.3.0 was rejected: %v", err)
+	}
+}
+
+// Absent means "no floor". Seeding a real default would write a line
+// into every scaffolded config that reads like a decision and changes
+// nothing.
+func TestMinVersionDefaultsToAbsent(t *testing.T) {
+	if got := Defaults().MinVersion; got != "" {
+		t.Errorf("Defaults().MinVersion = %q, want empty", got)
+	}
+}

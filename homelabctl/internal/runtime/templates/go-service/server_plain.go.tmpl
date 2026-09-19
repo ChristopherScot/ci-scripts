@@ -29,12 +29,15 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/mod/semver"
 )
 
 var (
@@ -67,6 +70,23 @@ func (r *statusRecorder) WriteHeader(code int) {
 // be a string written in this file.
 func observe(route string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
+		// Refused before the handler runs: a client below the floor is
+		// one whose requests are the problem, so serving it is the
+		// thing being prevented.
+		//
+		// 410 Gone, not 429: the generated clients retry 429 and 5xx
+		// and nothing else, so 410 stops them dead. A status they
+		// retried would turn one stuck client into a storm.
+		if tooOld(req) {
+			slog.Warn("refusing a client below the floor",
+				"route", route,
+				"client", clientName(req),
+				"client_version", req.Header.Get(ClientVersionHeader),
+				"min_version", minVersion)
+			http.Error(w, "this client is too old; reload or upgrade", http.StatusGone)
+			return
+		}
+
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next(rec, req)
@@ -103,6 +123,44 @@ const (
 	ClientNameHeader    = "Client-Name"
 	ClientVersionHeader = "Client-Version"
 )
+
+// minVersion is the oldest client this service answers, from
+// MIN_VERSION in the environment. Empty means no floor, which is the
+// normal state: the check is inert until someone raises it.
+//
+// Read at startup rather than compiled in, so raising the floor is a
+// config.yaml edit and a restart. That matters because the floor is
+// raised in response to a client actively causing harm, and a rebuild
+// is the slowest possible way to respond to that.
+var minVersion = os.Getenv("MIN_VERSION")
+
+// tooOld reports whether a caller is below the floor.
+//
+// Both sides are compared as semver with the leading v that
+// golang.org/x/mod/semver requires. Clients report a BARE version -
+// openapi.yml's info.version for Go, package.json's for TypeScript,
+// and npm forbids the prefix - so the v is added here rather than
+// expected on the wire. The VERSION files that do carry one drive
+// release tags and never reach this header.
+//
+// FAILS OPEN on anything it cannot parse, and on a caller that sends no
+// version at all. Those are curl, a probe, a script - not the stale
+// client this exists to stop - and refusing them would break far more
+// than it fixed.
+func tooOld(r *http.Request) bool {
+	if minVersion == "" {
+		return false
+	}
+	got := r.Header.Get(ClientVersionHeader)
+	if got == "" {
+		return false
+	}
+	got, floor := "v"+got, "v"+strings.TrimPrefix(minVersion, "v")
+	if !semver.IsValid(got) || !semver.IsValid(floor) {
+		return false
+	}
+	return semver.Compare(got, floor) < 0
+}
 
 // clientName is which service sent a request.
 //
