@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -86,53 +85,6 @@ func manifestDir(dir string) string {
 // A cluster that cannot be reached is not a failure. This runs in CI,
 // which has no kubeconfig, and a check that cannot run should not be
 // the reason a build goes red.
-// checkArgoConditions reports what Argo says about this service.
-//
-// The API server is the only thing that can validate a hand-written
-// manifest: it knows the CRD schema, and this tool does not. When Argo
-// applies a bad CNPG Cluster the failure lands on the Application as a
-// condition - SyncError for an apply or prune that failed,
-// ComparisonError when Argo cannot even determine sync state - and
-// nothing in the service repo mentions it. Someone has to open the
-// Argo UI to find out.
-//
-// So this does not try to validate those resources. It asks the thing
-// that already did.
-//
-// Silent when there is no cluster: check runs in CI, where kubectl
-// reaches nothing, and a missing cluster is not a problem with the
-// service's manifests.
-func checkArgoConditions(name string, add func(string, ...any)) {
-	out, err := exec.Command("kubectl", "get", "application", "-n", "argocd", name,
-		"-o", "json").Output()
-	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
-		return
-	}
-	var app struct {
-		Status struct {
-			Conditions []struct {
-				Type    string `json:"type"`
-				Message string `json:"message"`
-			} `json:"conditions"`
-			Health struct {
-				Status string `json:"status"`
-			} `json:"health"`
-			Sync struct {
-				Status string `json:"status"`
-			} `json:"sync"`
-		} `json:"status"`
-	}
-	if json.Unmarshal(out, &app) != nil {
-		return
-	}
-	for _, c := range app.Status.Conditions {
-		add("argo reports %s on %s: %s", c.Type, name, strings.TrimSpace(c.Message))
-	}
-	if h := app.Status.Health.Status; h == "Degraded" || h == "Missing" {
-		add("argo reports %s as %s", name, h)
-	}
-}
-
 func checkESOVersion(add func(string, ...any)) {
 	// -o name omits the version, which is the thing being compared.
 	// The APIVERSION column carries it.
@@ -262,7 +214,6 @@ func runCheck(dir string) error {
 	dir = manifestDir(dir)
 
 	checkESOVersion(add)
-	checkArgoConditions(filepath.Base(dir), add)
 
 	kPath := filepath.Join(dir, "kustomization.yaml")
 	kb, err := os.ReadFile(kPath)

@@ -1,4 +1,6 @@
-v1.10.0
+v1.11.0
+
+v1.11.0 homelabctl status reports what Argo made of a service
 
 v1.10.0 check surfaces Argo's own errors instead of guessing at hand-written manifests
 
