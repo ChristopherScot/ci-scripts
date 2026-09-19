@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -169,7 +170,17 @@ func runInit(o initOpts) error {
 		// answer was no, so init descended and produced
 		// services/alpha/<repo>/services/<name>. Asking where the
 		// repository IS has one answer from anywhere inside it.
-		if root := repoRoot(); filepath.Base(root) == o.parentRepo {
+		// Asks the REMOTE what this repo is called, not the directory.
+		//
+		// Comparing filepath.Base(root) assumes the checkout directory
+		// is named after the repo. Clone it anywhere else - a worktree,
+		// a CI checkout, or just `git clone <url> work` - and the names
+		// differ, so init decided it was NOT in the parent repo and
+		// created one as a subdirectory: <repo>/hlx-mono/services/<name>
+		// inside the repo it was already standing in.
+		//
+		// The basename is still the fallback, for a repo with no origin.
+		if root := repoRoot(); root != "" && repoNameMatches(root, o.parentRepo) {
 			dir = root
 		} else {
 			dir = o.parentRepo
@@ -682,6 +693,25 @@ func resolveOwner(o initOpts) (string, error) {
 // silently edited a file the author did not expect it to touch.
 func offerToPersist(owner string) {
 	fmt.Printf("\n  to skip this next time: export %s=%s\n\n", ownerEnv, owner)
+}
+
+// repoNameMatches reports whether the repository at root is the one
+// named by --parent-repo.
+//
+// From origin when there is one, because that is what the repository IS
+// rather than where it happens to sit on disk.
+func repoNameMatches(root, want string) bool {
+	if want == "" {
+		return false
+	}
+	out, err := exec.Command("git", "-C", root, "remote", "get-url", "origin").Output()
+	if err != nil {
+		// No remote to ask: fall back to the directory name, which is
+		// the old behaviour and right for a repo that was never pushed.
+		return filepath.Base(root) == want
+	}
+	url := strings.TrimSuffix(strings.TrimSpace(string(out)), ".git")
+	return path.Base(url) == want
 }
 
 // ghLogin is the account gh is authenticated as, or "" if it cannot say.

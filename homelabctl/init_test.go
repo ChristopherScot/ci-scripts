@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -532,5 +533,50 @@ func TestInitRewritesDerivedFiles(t *testing.T) {
 		if derived(name) {
 			t.Errorf("%s would be rewritten on a re-run, discarding edits", name)
 		}
+	}
+}
+
+// --parent-repo identifies the repo by its REMOTE, not by the name of
+// the directory it happens to sit in.
+//
+// Comparing filepath.Base(root) assumed the checkout is named after the
+// repo. Clone it anywhere else - a worktree, a CI checkout, or just
+// `git clone <url> work` - and init decided it was NOT inside the
+// parent repo and created one as a subdirectory:
+// <repo>/hlx-mono/services/<name>, inside the repo it was standing in.
+func TestParentRepoMatchesOnTheRemote(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"remote", "add", "origin", "https://github.com/o/the-real-name.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	// The directory is NOT named after the repo, which is the case that
+	// used to produce a nested copy.
+	if !repoNameMatches(dir, "the-real-name") {
+		t.Error("a repo whose directory has a different name was not recognised")
+	}
+	if repoNameMatches(dir, "some-other-repo") {
+		t.Error("an unrelated repo name matched")
+	}
+}
+
+// With no origin, the directory name is still the answer: a repo that
+// was never pushed has nothing else to go on.
+func TestParentRepoFallsBackToTheDirectory(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if !repoNameMatches(dir, filepath.Base(dir)) {
+		t.Error("a remoteless repo did not fall back to its directory name")
 	}
 }
