@@ -1,4 +1,6 @@
-v1.11.1
+v1.12.0
+
+v1.12.0 init rewrites derived files instead of keeping stale ones
 
 v1.11.1 status --all covers the repo's services, and names the resource that failed
 

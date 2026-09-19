@@ -572,6 +572,30 @@ func overwritable(path string) bool {
 	return true
 }
 
+// derived reports whether a path is computed entirely from config.yaml,
+// with nothing of the author's in it.
+//
+// Those files are rewritten on every run, ignoring the "skip what
+// already exists" rule that protects everything else. That rule exists
+// so a service's source survives a re-run - but these have no content
+// to protect, and keeping a stale one is actively wrong:
+// kustomization.yaml lists the other files, so a re-run that wrote a
+// new manifest kept a resources: block that did not mention it. The
+// file was committed, visible in the diff, and never applied.
+//
+// argocd.json is the same shape: it carries repoURL and manifestPath,
+// so a stale copy points Argo at where the service used to be.
+//
+// Matched on the base name because the deploy directory is nested under
+// deploy/<name>/.
+func derived(path string) bool {
+	switch filepath.Base(path) {
+	case "kustomization.yaml", render.AppEntryFile:
+		return true
+	}
+	return false
+}
+
 // checkOverwrite rejects a name that is not scaffolding, before anything
 // is written.
 //
@@ -729,7 +753,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 
 	put := func(path, body string) error {
 		full := filepath.Join(dir, path)
-		if _, err := os.Stat(full); err == nil {
+		if _, err := os.Stat(full); err == nil && !derived(path) {
 			// Scaffolded files are handed over and never rewritten,
 			// which is what makes them editable - and also means a later
 			// template fix cannot reach a service that already exists.

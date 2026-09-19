@@ -505,3 +505,32 @@ func TestPrintedCommandsAreRunnable(t *testing.T) {
 		}
 	}
 }
+
+// kustomization.yaml and argocd.json are computed from config.yaml with
+// nothing of the author's in them, so init rewrites them on every run.
+//
+// They used to fall under the "skip what already exists" rule that
+// protects a service's source. That rule is right for server.go and
+// wrong for these: kustomization.yaml LISTS the other files, so a
+// re-run that wrote a new manifest kept a resources: block that did not
+// mention it. The manifest was committed, visible in the diff, and
+// never applied - argocd.json is the same shape, carrying a repoURL
+// that goes stale the same way.
+func TestInitRewritesDerivedFiles(t *testing.T) {
+	for _, name := range []string{"kustomization.yaml", "argocd.json"} {
+		if !derived(filepath.Join("deploy", "svc", name)) {
+			t.Errorf("%s is not treated as derived, so a re-run keeps a stale copy", name)
+		}
+	}
+	// Everything a service owns must still be protected, or a re-run
+	// silently reverts the author's work.
+	for _, name := range []string{
+		"server.go", "main.go", "config.yaml", "openapi.yml",
+		filepath.Join("deploy", "svc", "deployment.yaml"),
+		filepath.Join("deploy", "svc", "manifests", "db.yaml"),
+	} {
+		if derived(name) {
+			t.Errorf("%s would be rewritten on a re-run, discarding edits", name)
+		}
+	}
+}
