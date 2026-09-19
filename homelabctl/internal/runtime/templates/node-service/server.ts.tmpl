@@ -68,6 +68,63 @@ const latency = new Histogram({
   labelNames: ['route', 'method'],
 })
 
+// The oldest client this service answers, from MIN_VERSION in the
+// environment. Empty means no floor, which is the normal state.
+//
+// Read at startup rather than built in, so raising the floor is a
+// config.yaml edit and a restart. That matters because the floor is
+// raised in response to a client actively causing harm, and a rebuild
+// is the slowest possible way to respond.
+export const floor = { minVersion: process.env.MIN_VERSION ?? '' }
+
+// Compare two versions as numbers, lowest part first.
+//
+// Clients send a bare semver - openapi.yml's info.version for a Go
+// client, package.json's for a TypeScript one, and the browser's own
+// UI_VERSION - while config.yaml writes the leading v. Stripping it
+// here means one spelling reaches the comparison whatever sent it.
+function below(got: string, floor: string): boolean {
+  const parts = (v: string) => v.replace(/^v/, '').split('.').map(Number)
+  const a = parts(got)
+  const b = parts(floor)
+  if (a.length !== 3 || b.length !== 3 || [...a, ...b].some(Number.isNaN)) {
+    return false // unparseable: not this check's place to judge
+  }
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] < b[i]
+  }
+  return false
+}
+
+// Turn away a client below the floor before its request does any work.
+//
+// 410 Gone, not 429: the generated clients retry 429 and 5xx and nothing
+// else, so 410 stops them dead. A status they retried would turn one
+// stuck client into a storm.
+//
+// FAILS OPEN on a caller that sends no version and on anything it cannot
+// parse - that is the kubelet, Alloy, curl and scripts, not the stale
+// client this exists to stop. /metrics and /healthz are skipped
+// outright: blocking a probe would turn a client problem into an outage
+// of this service.
+app.addHook('onRequest', (request, reply, done) => {
+  const route = request.routeOptions?.url ?? 'other'
+  if (!floor.minVersion || route === '/metrics' || route === '/healthz') {
+    return done()
+  }
+  const got = request.headers['client-version']
+  if (typeof got !== 'string' || !got || !below(got, floor.minVersion)) {
+    return done()
+  }
+  request.log.warn({
+    route,
+    client: request.headers['client-name'] ?? 'unknown',
+    client_version: got,
+    min_version: floor.minVersion,
+  }, 'refusing a client below the floor')
+  reply.code(410).send({ message: 'this client is too old; reload or upgrade' })
+})
+
 // Log and measure every request.
 //
 // The route label is the matched ROUTE PATTERN, never the raw url: a path

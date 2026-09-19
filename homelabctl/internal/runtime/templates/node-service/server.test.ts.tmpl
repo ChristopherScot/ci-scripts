@@ -1,7 +1,7 @@
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { app } from './server.ts'
+import { app, floor } from './server.ts'
 
 // app.inject() drives the real routes and hooks without binding a port,
 // so these are fast and need no cleanup between cases.
@@ -48,4 +48,60 @@ test('an unrouted path is never used as a label', async () => {
 
   assert.doesNotMatch(res.body, /deadbeef/)
   assert.match(res.body, /http_requests_total\{[^}]*route="other"/)
+})
+
+// The client floor, which is off unless MIN_VERSION is set.
+//
+// Every case that FAILS OPEN matters more than the one that refuses:
+// the kubelet, Alloy and curl all send no version, and a floor that
+// blocked them would turn a client problem into an outage of this
+// service.
+test('the client floor refuses only what it should', async () => {
+  const cases: Array<[string, string, string, number]> = [
+    ['no floor set', '', '0.1.0', 200],
+    ['above the floor', '0.3.0', '0.4.0', 200],
+    ['exactly at the floor', '0.3.0', '0.3.0', 200],
+    ['below the floor', '0.3.0', '0.2.9', 410],
+    ['no version sent fails open', '0.3.0', '', 200],
+    ['unparseable fails open', '0.3.0', 'banana', 200],
+    ['a v-prefixed floor still compares', 'v0.3.0', '0.2.0', 410],
+  ]
+  const was = floor.minVersion
+  try {
+    for (const [name, min, sent, want] of cases) {
+      floor.minVersion = min
+      const res = await app.inject({
+        method: 'GET',
+        url: '/',
+        headers: sent ? { 'client-version': sent } : {},
+      })
+      assert.equal(res.statusCode, want, name)
+    }
+  } finally {
+    floor.minVersion = was
+  }
+})
+
+// The kubelet sends no client-version. If a raised floor blocked
+// /healthz the pod would fail its probes and crashloop - a client
+// problem turned into an outage of the service itself. /metrics is the
+// same: Alloy scrapes it and would go blind exactly when a floor is
+// raised.
+test('probes and metrics survive an impossible floor', async () => {
+  const was = floor.minVersion
+  floor.minVersion = '99.99.99'
+  try {
+    for (const url of ['/healthz', '/metrics']) {
+      const res = await app.inject({
+        method: 'GET',
+        url,
+        // A version is sent on purpose: without one, fail-open would
+        // pass whether or not these routes are excluded.
+        headers: { 'client-version': '0.0.1' },
+      })
+      assert.notEqual(res.statusCode, 410, `${url} must never be refused`)
+    }
+  } finally {
+    floor.minVersion = was
+  }
 })

@@ -1,4 +1,6 @@
-v1.18.1
+v1.18.2
+
+v1.18.2 the client floor reaches node services too
 
 v1.18.1 a minimum client version, refused with 410 rather than served
 
