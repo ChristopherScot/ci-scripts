@@ -348,3 +348,57 @@ func TestExplicitResourcesOverrideTheRuntimeDefault(t *testing.T) {
 		t.Errorf("explicit resources were overwritten: %+v", c.Resources)
 	}
 }
+
+// A range violation must not read as an exact requirement.
+//
+// The library prints "minimum: got -1, want 1" for `minimum: 1`, which
+// reads as "1 is the only valid value". It is not - replicas: 2 is
+// fine - and somebody checking that wording goes looking for a
+// constraint that does not exist.
+func TestRangeErrorsSayAtLeastAndAtMost(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"minimum: got -1, want 1", "minimum: got -1, want at least 1"},
+		{"maximum: got 99,999, want 65,535", "maximum: got 99,999, want at most 65,535"},
+		{"type: got string, want integer", "type: got string, want integer"},
+	} {
+		if got := clarifyBound(tc.in); got != tc.want {
+			t.Errorf("clarifyBound(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// And the values a bound permits are actually accepted, so the wording
+// is describing real behaviour.
+func TestReplicasAboveOneAreValid(t *testing.T) {
+	for _, n := range []int{1, 2, 3, 10} {
+		c := Defaults()
+		c.Name, c.Team, c.Runtime = "svc", "platform", "go-service"
+		c.Port = 8080
+		c.Image.Repository = "ghcr.io/example/svc"
+		c.Replicas = n
+		if err := c.Complete(); err != nil {
+			t.Errorf("replicas: %d was rejected: %v", n, err)
+		}
+	}
+	// Zero means "unset" to Complete, because it is Go's zero value and
+	// a struct built in code cannot say "explicitly zero" - it defaults
+	// to 1. A config FILE does not have that ambiguity, and the schema
+	// rejects `replicas: 0` before Complete ever sees it, which is the
+	// path a user takes.
+	c := Defaults()
+	c.Name, c.Team, c.Runtime = "svc", "platform", "go-service"
+	c.Port = 8080
+	c.Image.Repository = "ghcr.io/example/svc"
+	c.Replicas = 0
+	if err := c.Complete(); err != nil {
+		t.Errorf("an unset replicas should default, not fail: %v", err)
+	}
+	if c.Replicas != 1 {
+		t.Errorf("unset replicas defaulted to %d, want 1", c.Replicas)
+	}
+	// Negative is unambiguous, and must fail.
+	c.Replicas = -1
+	if err := c.Complete(); err == nil {
+		t.Error("replicas: -1 was accepted")
+	}
+}

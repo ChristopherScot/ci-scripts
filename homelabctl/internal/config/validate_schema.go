@@ -81,6 +81,24 @@ func validateAgainstSchema(b []byte) error {
 
 // schemaProblems flattens the validation tree into one sorted line per
 // problem, so a config with three mistakes reports three lines instead
+// clarifyBound rewrites the library's phrasing for a range violation.
+//
+// A `minimum: 1` failure prints "minimum: got -1, want 1", which reads
+// as "1 is the only valid value". It is not - replicas: 2 is fine, and
+// somebody checking that wording goes looking for a constraint that
+// does not exist.
+//
+// Only the wording changes; the schema decides what is valid.
+func clarifyBound(msg string) string {
+	switch {
+	case strings.HasPrefix(msg, "minimum: "):
+		return strings.Replace(msg, ", want ", ", want at least ", 1)
+	case strings.HasPrefix(msg, "maximum: "):
+		return strings.Replace(msg, ", want ", ", want at most ", 1)
+	}
+	return msg
+}
+
 // of the nested causes the library returns.
 func schemaProblems(ve *jsonschema.ValidationError) []string {
 	var out []string
@@ -92,7 +110,8 @@ func schemaProblems(ve *jsonschema.ValidationError) []string {
 			if where == "" {
 				where = "config"
 			}
-			out = append(out, fmt.Sprintf("  - %s: %s", where, e.ErrorKind.LocalizedString(printer)))
+			out = append(out, fmt.Sprintf("  - %s: %s", where,
+				clarifyBound(e.ErrorKind.LocalizedString(printer))))
 			return
 		}
 		for _, c := range e.Causes {
