@@ -128,14 +128,15 @@ const Schema = `{
                 "additionalProperties": false,
                 "properties": {
                   "name": { "type": "string" },
-                  "tls": { "type": "boolean" }
+                  "tls": { "type": "boolean" },
+                  "public": { "type": "boolean", "description": "Route THIS host via the internet-facing controller. Omit to follow ingress.public. Per host, so a service can hold a LAN name and a public one without dragging one onto the other's controller." }
                 }
               }
             ]
           }
         },
-        "public": { "type": "boolean", "description": "Route via the internet-facing controller instead of the LAN one." },
-        "authelia": { "type": "boolean", "description": "Put Authelia forward-auth in front. LAN-only; cannot be combined with public." },
+        "public": { "type": "boolean", "description": "Default for every host that does not set its own. A host-level public wins; prefer it when only some names are internet-facing." },
+        "authelia": { "type": "boolean", "description": "Put Authelia forward-auth in front. LAN-only: it cannot cover a host that is public, because the auth host resolves on the LAN only." },
         "path": { "type": "string", "pattern": "^/", "description": "URL prefix this service answers on, default /. Lets several services share one hostname; the prefix is stripped before the request reaches the service." }
       }
     },

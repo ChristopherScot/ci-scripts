@@ -252,6 +252,27 @@ func (k *SecretKey) UnmarshalYAML(value *yaml.Node) error {
 type IngressHost struct {
 	Name string
 	TLS  bool
+
+	// Public routes THIS host via the internet-facing controller.
+	//
+	// Per host, because a service usually wants both: a LAN name and a
+	// WAN one. ingress.public applies to every host, which made
+	// exposing one name drag the others onto the public controller with
+	// it - a .home. name that resolves to a LAN address, served by the
+	// controller meant for the internet.
+	//
+	// nil means "whatever ingress.public says", so existing configs
+	// keep their meaning.
+	Public *bool
+}
+
+// IsPublic reports whether this host goes on the public controller,
+// falling back to the Ingress-wide setting.
+func (h IngressHost) IsPublic(ingressDefault bool) bool {
+	if h.Public != nil {
+		return *h.Public
+	}
+	return ingressDefault
 }
 
 // UnmarshalYAML accepts a bare hostname or a {name, tls} mapping.
@@ -262,8 +283,9 @@ func (h *IngressHost) UnmarshalYAML(value *yaml.Node) error {
 		return nil
 	}
 	var m struct {
-		Name string `yaml:"name"`
-		TLS  *bool  `yaml:"tls"`
+		Name   string `yaml:"name"`
+		TLS    *bool  `yaml:"tls"`
+		Public *bool  `yaml:"public"`
 	}
 	if err := value.Decode(&m); err != nil {
 		return fmt.Errorf("an ingress host must be a name, or a mapping of name and tls")
@@ -276,16 +298,21 @@ func (h *IngressHost) UnmarshalYAML(value *yaml.Node) error {
 	if m.TLS != nil {
 		h.TLS = *m.TLS
 	}
+	h.Public = m.Public
 	return nil
 }
 
 // MarshalYAML writes back the form the host came from, so a file this
 // tool writes is a file it can read.
 func (h IngressHost) MarshalYAML() (any, error) {
-	if h.TLS == Certifiable(h.Name) {
+	if h.TLS == Certifiable(h.Name) && h.Public == nil {
 		return h.Name, nil
 	}
-	return map[string]any{"name": h.Name, "tls": h.TLS}, nil
+	m := map[string]any{"name": h.Name, "tls": h.TLS}
+	if h.Public != nil {
+		m["public"] = *h.Public
+	}
+	return m, nil
 }
 
 // IngressHosts builds hosts the conventional way, deriving TLS from each
@@ -715,8 +742,17 @@ func (c Config) Validate() error {
 		// Authelia is LAN-only; pairing it with a public host produces an
 		// endpoint that dead-ends off-network, which is invisible until
 		// someone tries it from cellular.
-		if c.Ingress.Public && c.Ingress.Authelia {
-			add("ingress.authelia cannot be used with ingress.public: the auth host resolves on the LAN only, so off-LAN requests would dead-end")
+		if c.Ingress.Authelia {
+			// Per host, for the same reason public is: a service can
+			// have a LAN name behind Authelia and a public name that
+			// cannot be, and the old whole-Ingress check could not
+			// express that. It names the offending host now rather
+			// than rejecting the pairing wholesale.
+			for _, h := range c.Ingress.Hosts {
+				if h.IsPublic(c.Ingress.Public) {
+					add("ingress.authelia cannot cover %s, which is public: the auth host resolves on the LAN only, so off-LAN requests would dead-end", h.Name)
+				}
+			}
 		}
 	}
 	if len(errs) > 0 {

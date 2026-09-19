@@ -806,29 +806,60 @@ spec:
 // That is what makes an impossible ACME order structurally impossible
 // rather than merely avoided - cert-manager never looks at it.
 func ingress(c *config.Config) string {
-	class := "external"
-	if c.Ingress.Public {
-		class = "public"
+	// Grouped by controller AND by certificate, because both decide
+	// which Ingress a host belongs on.
+	//
+	// public used to be a property of the whole Ingress, so a service
+	// with a LAN name and a WAN name had to choose one controller for
+	// both: exposing pokemon.chrisscotmartin.com dragged
+	// pokemon.home.chrisscotmartin.com onto the public controller with
+	// it, a name resolving to 192.168.50.225 served by the controller
+	// facing the internet. A host is public or it is not.
+	type group struct {
+		class string
+		tls   bool
 	}
-
-	var certified, plain []config.IngressHost
+	// Ordered, so the rendered output does not depend on map iteration.
+	order := []group{
+		{"external", true}, {"external", false},
+		{"public", true}, {"public", false},
+	}
+	hosts := map[group][]config.IngressHost{}
 	for _, h := range c.Ingress.Hosts {
-		if h.TLS {
-			certified = append(certified, h)
-		} else {
-			plain = append(plain, h)
+		class := "external"
+		if h.IsPublic(c.Ingress.Public) {
+			class = "public"
 		}
+		g := group{class, h.TLS}
+		hosts[g] = append(hosts[g], h)
 	}
 
 	var b strings.Builder
-	if len(certified) > 0 {
-		b.WriteString(ingressDoc(c, class, c.Name, certified, true))
-	}
-	if len(plain) > 0 {
+	for _, g := range order {
+		hs := hosts[g]
+		if len(hs) == 0 {
+			continue
+		}
+		// One name per document, suffixed by what makes it distinct.
+		// Always, so the name says which controller and which
+		// certificate posture an Ingress has without reading its spec.
+		//
+		// The cost is a one-time rename for services already public via
+		// ingress.public - ntfy and approvald - where Argo deletes the
+		// old object and creates the new one. That drops the route for
+		// a moment and re-associates the certificate. Worth doing once
+		// rather than carrying a conditional name forever.
+		name := c.Name
+		if g.class == "public" {
+			name += "-public"
+		}
+		if !g.tls {
+			name += "-lan"
+		}
 		if b.Len() > 0 {
 			b.WriteString("---\n")
 		}
-		b.WriteString(ingressDoc(c, class, c.Name+"-lan", plain, false))
+		b.WriteString(ingressDoc(c, g.class, name, hs, g.tls))
 	}
 	return b.String()
 }

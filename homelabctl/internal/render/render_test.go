@@ -893,3 +893,85 @@ func TestValidManifestSeesEveryDocument(t *testing.T) {
 		t.Errorf("a valid two-document manifest was rejected: %v", err)
 	}
 }
+
+// public is a property of a HOST, not of the whole Ingress.
+//
+// It used to be all-or-nothing, so a service with a LAN name and a WAN
+// name had to put both on one controller: exposing
+// pokemon.chrisscotmartin.com would have dragged
+// pokemon.home.chrisscotmartin.com onto the public controller with it -
+// a name resolving to 192.168.50.225, served by the controller facing
+// the internet.
+func TestPublicIsPerHost(t *testing.T) {
+	yes := true
+	c := config.Defaults()
+	c.Name = "svc"
+	c.Team = "platform"
+	c.Runtime = "go"
+	c.Port = 8080
+	c.Image.Repository = "ghcr.io/example/svc"
+	c.Ingress = &config.Ingress{Hosts: []config.IngressHost{
+		{Name: "svc.home.example.com", TLS: true},
+		{Name: "svc.example.com", TLS: true, Public: &yes},
+	}}
+
+	outs, err := All(&c, Source{})
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	var body string
+	for _, o := range outs {
+		if o.Path == "ingress.yaml" {
+			body = o.Body
+		}
+	}
+
+	// The LAN host must NOT be on the public controller. Checked by
+	// splitting the documents, because both class names appear in one
+	// file and a Contains over the whole thing proves nothing.
+	for _, doc := range strings.Split(body, "\n---\n") {
+		public := strings.Contains(doc, "ingressClassName: public")
+		if public && strings.Contains(doc, "svc.home.example.com") {
+			t.Error("the LAN host was routed via the public controller")
+		}
+		if !public && strings.Contains(doc, "host: svc.example.com") {
+			t.Error("the public host was routed via the LAN controller")
+		}
+	}
+}
+
+// A public Ingress is always named -public, even when it is the only
+// one.
+//
+// The name is how you tell what an Ingress is without reading its spec.
+// An Ingress called "ntfy" sitting on the public controller reads as
+// internal at a glance, which is the wrong way for that mistake to go.
+//
+// The cost is a one-time rename for services already public via
+// ingress.public: Argo deletes the old object and creates the new one,
+// dropping the route briefly. Paid once.
+func TestPublicIngressIsAlwaysNamedPublic(t *testing.T) {
+	c := config.Defaults()
+	c.Name = "svc"
+	c.Team = "platform"
+	c.Runtime = "go"
+	c.Port = 8080
+	c.Image.Repository = "ghcr.io/example/svc"
+	c.Ingress = &config.Ingress{
+		Hosts:  []config.IngressHost{{Name: "svc.example.com", TLS: true}},
+		Public: true,
+	}
+
+	outs, err := All(&c, Source{})
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	for _, o := range outs {
+		if o.Path != "ingress.yaml" {
+			continue
+		}
+		if !strings.Contains(o.Body, "name: svc-public") {
+			t.Errorf("a public Ingress is not named -public, so it reads as internal:\n%s", o.Body)
+		}
+	}
+}

@@ -1,4 +1,6 @@
-v1.15.0
+v1.16.0
+
+v1.16.0 public is per host, so a service can hold a LAN name and a WAN one
 
 v1.15.0 requests carry the calling service and client version, and the server logs both
 
