@@ -127,6 +127,27 @@ func imageRef(c *config.Config) string {
 	return c.Image.Repository + ":latest"
 }
 
+// ManifestDir is where hand-written manifests are rendered, relative to
+// the service's deploy directory.
+//
+// A subdirectory rather than the deploy root, so a hand-written file
+// cannot take a generated file's name. Flat, they shared one namespace
+// with no arbitration: manifests: [service.yaml] was written after the
+// generated Service and replaced it on disk, and under prune: true Argo
+// deletes the live one. manifests: [argocd.json] was worse - excluded
+// from resources: by design AND overwritten, so the resource existed
+// nowhere while every command reported success.
+//
+// A collision check catches all of that, and is kept. This makes the
+// collision unrepresentable instead, which is the stronger guarantee:
+// the two namespaces are now separate directories.
+const ManifestDir = "manifests"
+
+// manifestPath is where a named manifest is rendered.
+func manifestPath(name string) string {
+	return ManifestDir + "/" + name
+}
+
 // Files lists the paths a service's deploy directory will contain,
 // without rendering any of them.
 //
@@ -145,7 +166,9 @@ func Files(c *config.Config) []string {
 	for _, f := range selectedFiles(c) {
 		paths = append(paths, f.path)
 	}
-	paths = append(paths, c.Manifests...)
+	for _, name := range c.Manifests {
+		paths = append(paths, manifestPath(name))
+	}
 	paths = append(paths, "kustomization.yaml", AppEntryFile)
 	return paths
 }
@@ -220,32 +243,13 @@ func All(c *config.Config, src Source) ([]Output, error) {
 	// and an override replacing a file the author already wrote by hand
 	// is just a second copy of it - both would be silent no-ops of
 	// exactly the kind ShadowedPatches exists to catch.
-	// Names already spoken for, so a hand-written manifest cannot take
-	// one. Nothing checked this, and the consequences were silent:
-	//
-	//   manifests: [service.yaml]  - written second, so it REPLACED the
-	//     generated Service on disk and appeared twice in resources:.
-	//     kustomize then refused the whole directory, and under
-	//     prune: true Argo deletes the live Service.
-	//   manifests: [argocd.json]   - excluded from resources: by design
-	//     AND overwritten by the generated entry, so the resource
-	//     existed nowhere. render, check and kustomize all reported
-	//     success and the user got nothing.
-	//
-	// Both printed "wrote <path>" twice and exited 0.
-	taken := map[string]string{
-		"kustomization.yaml": "lists the other manifests",
-		AppEntryFile:         "is the Argo generator input",
-	}
-	for _, o := range out {
-		taken[o.Path] = "is generated from config.yaml"
-	}
+	// Duplicates only. A name cannot collide with a generated file any
+	// more - those render at the deploy root and these render under
+	// manifests/ - but the same file listed twice still appears twice in
+	// resources:, which kustomize refuses as a duplicate id.
 	seen := map[string]bool{}
 
 	for _, name := range c.Manifests {
-		if why, clash := taken[name]; clash {
-			return nil, fmt.Errorf("manifest %q collides with a file that %s; rename it", name, why)
-		}
 		if seen[name] {
 			return nil, fmt.Errorf("manifest %q is listed twice", name)
 		}
@@ -261,7 +265,7 @@ func All(c *config.Config, src Source) ([]Output, error) {
 		if err := validManifest(name, body); err != nil {
 			return nil, err
 		}
-		out = append(out, Output{Path: name, Body: body})
+		out = append(out, Output{Path: manifestPath(name), Body: body})
 	}
 
 	// Last: it lists the files above.

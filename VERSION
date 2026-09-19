@@ -1,4 +1,6 @@
-v1.8.0
+v1.9.0
+
+v1.9.0 hand-written manifests render under manifests/, so they cannot shadow generated files
 
 v1.8.0 memory defaults follow the runtime; CLI failures carry what the CLI said
 

@@ -107,3 +107,45 @@ func TestCheckResourcesQuietWhenConsistent(t *testing.T) {
 		t.Errorf("a consistent directory reported problems: %v", problems)
 	}
 }
+
+// check has to see inside manifests/.
+//
+// Hand-written manifests render into a subdirectory so they cannot
+// collide with generated names. Both of check's loops used ReadDir and
+// skipped IsDir entries, so that change quietly took those files out of
+// its sight: an orphaned manifest went unreported and a CHANGEME
+// placeholder passed. The fix for one bug disabled the validation for
+// another.
+func TestCheckResourcesLooksInsideSubdirectories(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "manifests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const body = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"
+	for _, f := range []string{"deployment.yaml", "manifests/db.yaml", "manifests/orphan.yaml"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// db.yaml is listed; orphan.yaml is not.
+	const k = `resources:
+  - deployment.yaml
+  - manifests/db.yaml
+`
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(k), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var problems []string
+	checkResources(dir, k, func(f string, a ...any) {
+		problems = append(problems, fmt.Sprintf(f, a...))
+	})
+
+	joined := strings.Join(problems, "\n")
+	if !strings.Contains(joined, "manifests/orphan.yaml") {
+		t.Errorf("a manifest nested in a subdirectory went unseen; got:\n%s", joined)
+	}
+	if strings.Contains(joined, "manifests/db.yaml") {
+		t.Errorf("a correctly listed nested manifest was reported:\n%s", joined)
+	}
+}

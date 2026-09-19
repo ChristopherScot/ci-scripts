@@ -625,7 +625,7 @@ spec:
 
 	var got string
 	for _, o := range outs {
-		if o.Path == "db.yaml" {
+		if o.Path == ManifestDir+"/db.yaml" {
 			got = o.Body
 		}
 	}
@@ -638,7 +638,7 @@ spec:
 		if o.Path != "kustomization.yaml" {
 			continue
 		}
-		if !strings.Contains(o.Body, "- db.yaml") {
+		if !strings.Contains(o.Body, "- "+ManifestDir+"/db.yaml") {
 			t.Errorf("kustomization.yaml does not list db.yaml:\n%s", o.Body)
 		}
 		return
@@ -775,7 +775,7 @@ func TestFilesNeedsNoSource(t *testing.T) {
 	}
 	var sawManifest, sawEntry bool
 	for _, p := range got {
-		if p == "db.yaml" {
+		if p == ManifestDir+"/db.yaml" {
 			sawManifest = true
 		}
 		if p == AppEntryFile {
@@ -790,24 +790,22 @@ func TestFilesNeedsNoSource(t *testing.T) {
 	}
 }
 
-// A manifest may not take the name of a file render generates.
+// A manifest sharing a generated file's name is no longer a collision.
 //
-// Nothing checked this, and every variant was silent. A hand-written
-// service.yaml was appended AFTER the generated one, so it replaced it
-// on disk and appeared twice in resources: - kustomize refused the
+// They used to share one namespace with no arbitration. A hand-written
+// service.yaml was appended after the generated Service, so it replaced
+// it on disk and appeared twice in resources: - kustomize refused the
 // directory, and under prune: true Argo deletes the live Service. A
-// hand-written argocd.json was excluded from resources: by design and
-// then overwritten by the generated entry, so the resource existed
-// nowhere at all. Both printed "wrote <path>" twice and exited 0, and
-// `check` reported "deploy manifests OK".
-func TestManifestsCannotCollideWithGeneratedFiles(t *testing.T) {
+// hand-written argocd.json was excluded from resources: by design AND
+// overwritten, so the resource existed nowhere while render, check and
+// kustomize all reported success.
+//
+// Hand-written manifests render under manifests/ now, so the two
+// namespaces are different directories and the collision cannot be
+// expressed. This asserts that rather than asserting an error.
+func TestManifestsCannotShadowGeneratedFiles(t *testing.T) {
 	const doc = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"
-	for _, name := range []string{
-		"service.yaml",       // generated for a plain service
-		"deployment.yaml",    // generated for a plain service
-		"kustomization.yaml", // lists the others
-		"argocd.json",        // the Argo generator input
-	} {
+	for _, name := range []string{"service.yaml", "deployment.yaml", "kustomization.yaml"} {
 		t.Run(name, func(t *testing.T) {
 			c := config.Defaults()
 			c.Name = "svc"
@@ -817,9 +815,27 @@ func TestManifestsCannotCollideWithGeneratedFiles(t *testing.T) {
 			c.Image.Repository = "ghcr.io/example/svc"
 			c.Manifests = []string{name}
 
-			_, err := All(&c, Source{Manifests: map[string]string{name: doc}})
-			if err == nil {
-				t.Fatalf("%s was accepted; it silently replaces or loses a resource", name)
+			outs, err := All(&c, Source{Manifests: map[string]string{name: doc}})
+			if err != nil {
+				t.Fatalf("All: %v", err)
+			}
+
+			// The generated file keeps its own body at the deploy root,
+			// and the hand-written one lands under manifests/.
+			var atRoot, nested string
+			for _, o := range outs {
+				switch o.Path {
+				case name:
+					atRoot = o.Body
+				case ManifestDir + "/" + name:
+					nested = o.Body
+				}
+			}
+			if nested != doc {
+				t.Errorf("hand-written %s did not render under %s/", name, ManifestDir)
+			}
+			if atRoot == doc {
+				t.Errorf("hand-written %s replaced the generated one at the deploy root", name)
 			}
 		})
 	}

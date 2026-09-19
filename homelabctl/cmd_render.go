@@ -120,6 +120,12 @@ func runRender(o renderOpts) error {
 	}
 	for _, o := range outs {
 		p := filepath.Join(dir, o.Path)
+		// An Output path may be nested - hand-written manifests render
+		// under manifests/ - so the directory is created per file rather
+		// than once for the service.
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
 		if err := os.WriteFile(p, []byte(o.Body), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", p, err)
 		}

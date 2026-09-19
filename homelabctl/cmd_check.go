@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
@@ -107,6 +109,35 @@ func checkESOVersion(add func(string, ...any)) {
 		"re-rendering every service", render.ESOAPIVersion)
 }
 
+// manifestFiles lists every manifest under dir, at any depth, as paths
+// relative to dir.
+//
+// Recursive because hand-written manifests render into a manifests/
+// subdirectory now. Both loops here used to call ReadDir and skip
+// entries with IsDir, so moving those files out of the deploy root took
+// them out of check's sight entirely: an orphaned manifest went
+// unreported and a CHANGEME placeholder passed. The change that made
+// collisions impossible quietly disabled the validation.
+func manifestFiles(dir string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !isYAML(d.Name()) {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		out = append(out, rel)
+		return nil
+	})
+	sort.Strings(out)
+	return out, err
+}
+
 // isYAML reports whether a filename is a manifest this should read.
 //
 // Both spellings: a file named db.yml is copied into deploy/ and listed
@@ -157,17 +188,17 @@ func checkResources(dir, kustomization string, add func(string, ...any)) {
 		}
 	}
 
-	entries, err := os.ReadDir(dir)
+	found, err := manifestFiles(dir)
 	if err != nil {
 		return
 	}
-	for _, e := range entries {
-		if e.IsDir() || !isYAML(e.Name()) || e.Name() == "kustomization.yaml" {
+	for _, rel := range found {
+		if rel == "kustomization.yaml" {
 			continue
 		}
-		if listed[e.Name()] == 0 {
+		if listed[rel] == 0 {
 			add("%s is in %s but not listed in kustomization.yaml, so Argo never applies it",
-				e.Name(), dir)
+				rel, dir)
 		}
 	}
 }
@@ -201,20 +232,17 @@ func runCheck(dir string) error {
 	// The spec lives beside the service, not in deploy/.
 	checkSpec(".", add)
 
-	entries, err := os.ReadDir(dir)
+	names, err := manifestFiles(dir)
 	if err != nil {
 		return err
 	}
-	for _, e := range entries {
+	for _, rel := range names {
 		// .yml as well as .yaml. A manifest named db.yml - the extension
 		// this repo uses for openapi.yml - was copied into deploy/ and
 		// listed in resources:, and check never opened it. A CHANGEME
 		// placeholder in db.yml passed where the same file as db.yaml
 		// was correctly flagged.
-		if e.IsDir() || !isYAML(e.Name()) {
-			continue
-		}
-		p := filepath.Join(dir, e.Name())
+		p := filepath.Join(dir, rel)
 		b, err := os.ReadFile(p)
 		if err != nil {
 			return err
