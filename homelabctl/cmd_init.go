@@ -943,7 +943,7 @@ func printNext(o initOpts, c *config.Config, dir string, isCLI bool) {
 	// it honest, and drifted through at least two renames unnoticed.
 	// Pointing at the command means it cannot drift again.
 	fmt.Println("  - register it with Argo, which opens a PR on the GitOps repo:")
-	fmt.Println("      homelabctl render --register")
+	fmt.Println("      homelabctl register")
 	// Named here because nothing else reports it: CI cannot reach the
 	// cluster, so a manifest the API server rejects is invisible until
 	// someone asks.
