@@ -1718,3 +1718,51 @@ func TestStartupGuardMatchesBothEntrypoints(t *testing.T) {
 		}
 	}
 }
+
+// Every npm scope a generated file mentions has to be lowercase.
+//
+// npm rejects an uppercase scope, and GitHub owners are commonly mixed
+// case - ChristopherScot among them. NPMScope() exists for this and
+// clients/ts/package.json used it, so the PUBLISHED name was always
+// right; the install hint in clients/ts/index.js used .Owner instead
+// and told anyone reading it to install @ChristopherScot/<name>-client,
+// which npm refuses.
+//
+// Nothing caught it for the obvious reason: the hint is a // comment,
+// so no build resolves it, and every test here used the owner "o",
+// which is already lowercase. This one does not.
+func TestNPMScopesAreLowercase(t *testing.T) {
+	p := testParams()
+	p.Owner = "ChristopherScot"
+	p.Spec = true
+
+	for _, name := range Names() {
+		r, err := Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q) = %v", name, err)
+		}
+		for _, f := range r.Artifacts(p).Files {
+			for i, line := range strings.Split(f.Body, "\n") {
+				for _, at := range scopeMentions(line) {
+					if at != strings.ToLower(at) {
+						t.Errorf("%s: %s:%d names scope %q; npm rejects an uppercase scope",
+							name, f.Path, i+1, at)
+					}
+				}
+			}
+		}
+	}
+}
+
+// scopeMentions pulls every @scope out of a line.
+func scopeMentions(line string) []string {
+	var out []string
+	for _, part := range strings.Split(line, "@")[1:] {
+		scope, _, ok := strings.Cut(part, "/")
+		if !ok || scope == "" || strings.ContainsAny(scope, " \t'\"`") {
+			continue
+		}
+		out = append(out, scope)
+	}
+	return out
+}
