@@ -633,7 +633,7 @@ func TestGoServiceClientHasResilienceDefaults(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"X-Client-Version",          // who is calling
+		"Client-Version",            // who is calling
 		"SingleRetry",               // one retry, not five
 		"ExponentialRetry",          // the escape hatch
 		"NoRetry",                   // fail fast
@@ -771,7 +771,7 @@ func TestGoServiceShipsATypeScriptClient(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"X-Client-Version", "singleRetry", "exponentialRetry",
+		"Client-Version", "Client-Name", "singleRetry", "exponentialRetry",
 		"noRetry", "CircuitOpenError", "Breaker",
 	} {
 		if !strings.Contains(js, want) {
@@ -1765,4 +1765,50 @@ func scopeMentions(line string) []string {
 		out = append(out, scope)
 	}
 	return out
+}
+
+// The clients send what the servers read, and no X- prefix survives.
+//
+// Four files have to agree on two strings: the Go client sets them, the
+// TypeScript client sets them, and both server templates read them.
+// Nothing links those at compile time - the server deliberately does
+// not import the client package - so a rename in one is a field that
+// silently logs empty in the other.
+//
+// RFC 6648 deprecated the X- prefix in 2012. X-Client-Version was
+// renamed while nothing read it, which was the only free moment; this
+// keeps it from creeping back.
+func TestClientHeadersAgreeAcrossTemplates(t *testing.T) {
+	p := testParams()
+	p.Spec = true
+	r, err := Get("go-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bodies := map[string]string{}
+	for _, f := range r.Artifacts(p).Files {
+		bodies[f.Path] = f.Body
+	}
+
+	// Every file that mentions a client header must use these exact
+	// names, and no X- form may appear anywhere.
+	for path, body := range bodies {
+		if strings.Contains(body, "X-Client-") {
+			t.Errorf("%s uses an X- prefixed header; RFC 6648 deprecated it", path)
+		}
+	}
+
+	// The two the server reads must be set by both clients.
+	for _, h := range []string{"Client-Name", "Client-Version"} {
+		for _, path := range []string{"api/client.go", "clients/ts/index.js"} {
+			body, ok := bodies[path]
+			if !ok {
+				t.Fatalf("no %s in the artifacts", path)
+			}
+			if !strings.Contains(body, h) {
+				t.Errorf("%s does not send %s, so the server logs it empty", path, h)
+			}
+		}
+	}
 }

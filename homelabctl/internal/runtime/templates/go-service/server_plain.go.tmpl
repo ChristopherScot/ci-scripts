@@ -80,6 +80,12 @@ func observe(route string, next http.HandlerFunc) http.HandlerFunc {
 			"method", req.Method,
 			"route", route,
 			"status", rec.status,
+			// WHO called, from the headers every generated client
+			// sends. Without it every request line looks identical
+			// whoever sent it, so a runaway client cannot be
+			// attributed without inference.
+			"client", clientName(req),
+			"client_version", req.Header.Get(ClientVersionHeader),
 			// Float milliseconds, not elapsed.Milliseconds(): that truncates to
 			// an integer, and a handler serving from memory finishes well under
 			// 1ms. Every line logged duration_ms=0, so the field was present and
@@ -87,6 +93,27 @@ func observe(route string, next http.HandlerFunc) http.HandlerFunc {
 			// whether the service is fast or dying.
 			"duration_ms", float64(elapsed.Nanoseconds())/1e6)
 	}
+}
+
+// Header names the generated clients send. Declared here so the server
+// does not depend on the client package to read its own requests.
+//
+// No X- prefix: RFC 6648 deprecated it in 2012.
+const (
+	ClientNameHeader    = "Client-Name"
+	ClientVersionHeader = "Client-Version"
+)
+
+// clientName is which service sent a request.
+//
+// "unknown" when the caller sends no header, rather than sniffed from
+// the user agent: an honest gap beats a confident wrong attribution,
+// and anything not built from a generated client is genuinely unknown.
+func clientName(r *http.Request) string {
+	if n := r.Header.Get(ClientNameHeader); n != "" {
+		return n
+	}
+	return "unknown"
 }
 
 // writeJSON keeps the Content-Type and the encoding in one place.
