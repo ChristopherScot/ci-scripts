@@ -1,4 +1,6 @@
-v1.9.0
+v1.10.0
+
+v1.10.0 check surfaces Argo's own errors instead of guessing at hand-written manifests
 
 v1.9.0 hand-written manifests render under manifests/, so they cannot shadow generated files
 

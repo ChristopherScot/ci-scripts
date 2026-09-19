@@ -149,3 +149,39 @@ func TestCheckResourcesLooksInsideSubdirectories(t *testing.T) {
 		t.Errorf("a correctly listed nested manifest was reported:\n%s", joined)
 	}
 }
+
+// Content checks are for what this tool generates, not for what a
+// service hand-wrote.
+//
+// CHANGEME placeholders and abbreviated image tags are defects in
+// homelabctl's own templates. A hand-written CNPG Cluster was never
+// scaffolded from one, so flagging it means having opinions about YAML
+// this tool did not write and cannot schema-validate. The API server
+// does that, when Argo applies it.
+//
+// The cross-reference still covers those files: kustomization.yaml IS
+// generated here, so "listed and present" is a claim about this tool's
+// own output.
+func TestContentChecksSkipHandWrittenManifests(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "manifests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A placeholder-looking word that is a legitimate value here.
+	const hand = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: db\ndata:\n  note: CHANGEME\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifests", "db.yaml"), []byte(hand), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const k = "resources:\n  - manifests/db.yaml\n"
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(k), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var problems []string
+	checkResources(dir, k, func(f string, a ...any) {
+		problems = append(problems, fmt.Sprintf(f, a...))
+	})
+	if len(problems) != 0 {
+		t.Errorf("a correctly listed hand-written manifest was reported: %v", problems)
+	}
+}
