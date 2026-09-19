@@ -455,13 +455,23 @@ var nameRE = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$`)
 // until the file is decoded. See applyDefaults.
 func Defaults() Config {
 	return Config{
-		Kind:      KindService,
-		Replicas:  1,
-		Hardened:  true,
-		Metrics:   true,
-		Spec:      true,
-		Probes:    &Probes{Path: DefaultProbePath},
-		Resources: &Resources{CPURequest: "10m", MemoryRequest: "32Mi", MemoryLimit: "64Mi"},
+		Kind:     KindService,
+		Replicas: 1,
+		Hardened: true,
+		Metrics:  true,
+		Spec:     true,
+		Probes:   &Probes{Path: DefaultProbePath},
+		// Memory deliberately left empty: it depends on the runtime,
+		// which is not known here, and Complete() fills it. Setting it
+		// here made the field non-empty, so the runtime-aware default
+		// had nothing to fill and every Node service inherited Go's
+		// 64Mi limit - which OOMKilled the deployed pokedex-web after
+		// five hours.
+		//
+		// An explicit resources: in config.yaml still wins either way:
+		// Load decodes the YAML over this struct, and Complete only
+		// fills what is still empty.
+		Resources: &Resources{CPURequest: "10m"},
 	}
 }
 
@@ -554,11 +564,34 @@ func (c *Config) applyDefaults() {
 	if c.Resources.CPURequest == "" {
 		c.Resources.CPURequest = "10m"
 	}
+	req, limit := memoryDefaults(c.Runtime)
 	if c.Resources.MemoryRequest == "" {
-		c.Resources.MemoryRequest = "32Mi"
+		c.Resources.MemoryRequest = req
 	}
 	if c.Resources.MemoryLimit == "" {
-		c.Resources.MemoryLimit = "64Mi"
+		c.Resources.MemoryLimit = limit
+	}
+}
+
+// memoryDefaults are per-runtime because a runtime's floor is a property
+// of the runtime, not of the service.
+//
+// One pair of numbers used to serve every runtime, sized for Go. The
+// deployed pokedex-web sat at 42Mi one minute after starting against a
+// 64Mi limit and was OOMKilled after five hours - exit 137, a 502 for
+// whoever was looking. The Go service beside it uses 8Mi.
+//
+// A Node process cannot live in 64Mi: the runtime, the V8 heap and a
+// bundled Fastify are most of it before the service does anything, and
+// V8 collects lazily enough that steady-state drifts upward for hours.
+// 256Mi gives it room to settle; a service that genuinely needs more
+// sets resources: in its config.
+func memoryDefaults(runtime string) (request, limit string) {
+	switch runtime {
+	case "node-service":
+		return "96Mi", "256Mi"
+	default:
+		return "32Mi", "64Mi"
 	}
 }
 

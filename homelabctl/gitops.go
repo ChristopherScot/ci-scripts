@@ -110,9 +110,10 @@ func openGitOpsPR(name, entry string) (string, error) {
 		return "", nil
 	}
 
-	head, err := exec.Command("gh", "api", "repos/"+slug+"/git/ref/heads/main", "--jq", ".object.sha").Output()
+	head, err := capture("reading "+slug+" main",
+		"gh", "api", "repos/"+slug+"/git/ref/heads/main", "--jq", ".object.sha")
 	if err != nil {
-		return "", fmt.Errorf("reading %s main: %w", slug, err)
+		return "", err
 	}
 	sha := strings.TrimSpace(string(head))
 
@@ -135,11 +136,9 @@ func openGitOpsPR(name, entry string) (string, error) {
 		fields["sha"] = blobSHA
 	}
 	body, _ := json.Marshal(fields)
-	put := exec.Command("gh", "api", "--method", "PUT", "repos/"+slug+"/contents/"+path, "--input", "-")
-	put.Stdin = strings.NewReader(string(body))
-	put.Stderr = os.Stderr
-	if err := put.Run(); err != nil {
-		return "", fmt.Errorf("writing %s to %s: %w", path, slug, err)
+	if err := runQuiet("writing "+path+" to "+slug, string(body),
+		"gh", "api", "--method", "PUT", "repos/"+slug+"/contents/"+path, "--input", "-"); err != nil {
+		return "", err
 	}
 
 	title, prBody := "argo: register "+name, "Adds `"+path+"` so the homelabctl-services "+

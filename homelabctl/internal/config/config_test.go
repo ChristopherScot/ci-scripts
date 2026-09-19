@@ -300,3 +300,51 @@ func TestIngressPathMustBeAUsablePrefix(t *testing.T) {
 		}
 	}
 }
+
+// A runtime's memory floor is a property of the runtime.
+//
+// One pair of numbers served every runtime, sized for Go. The deployed
+// pokedex-web sat at 42Mi a minute after starting against a 64Mi limit
+// and was OOMKilled after five hours - exit 137, a 502 for whoever was
+// looking. The Go service beside it uses 8Mi.
+func TestMemoryDefaultsFollowTheRuntime(t *testing.T) {
+	node := Defaults()
+	node.Name, node.Team, node.Runtime = "svc", "platform", "node-service"
+	node.Port = 3000
+	node.Image.Repository = "ghcr.io/example/svc"
+	if err := node.Complete(); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if node.Resources.MemoryLimit != "256Mi" {
+		t.Errorf("node-service limit = %q, want 256Mi; a Node process does not fit in Go's",
+			node.Resources.MemoryLimit)
+	}
+
+	goSvc := Defaults()
+	goSvc.Name, goSvc.Team, goSvc.Runtime = "svc", "platform", "go-service"
+	goSvc.Port = 8080
+	goSvc.Image.Repository = "ghcr.io/example/svc"
+	if err := goSvc.Complete(); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if goSvc.Resources.MemoryLimit != "64Mi" {
+		t.Errorf("go-service limit = %q, want 64Mi unchanged", goSvc.Resources.MemoryLimit)
+	}
+}
+
+// An explicit resources: block wins over whatever the runtime would
+// default to - otherwise a service that genuinely needs more has no way
+// to say so.
+func TestExplicitResourcesOverrideTheRuntimeDefault(t *testing.T) {
+	c := Defaults()
+	c.Name, c.Team, c.Runtime = "svc", "platform", "node-service"
+	c.Port = 3000
+	c.Image.Repository = "ghcr.io/example/svc"
+	c.Resources = &Resources{CPURequest: "10m", MemoryRequest: "200Mi", MemoryLimit: "512Mi"}
+	if err := c.Complete(); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if c.Resources.MemoryLimit != "512Mi" || c.Resources.MemoryRequest != "200Mi" {
+		t.Errorf("explicit resources were overwritten: %+v", c.Resources)
+	}
+}
