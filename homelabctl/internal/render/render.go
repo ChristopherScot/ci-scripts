@@ -594,9 +594,9 @@ func containerBody(c *config.Config, pad string) string {
 	// wrong value dressed as one. A job that reads it to decide where to
 	// listen would bind a random port; one that ignores it is merely
 	// carrying a lie. Either way there is nothing to serve.
-	env := map[string]string{}
+	env := map[string]config.EnvValue{}
 	if c.Port != 0 {
-		env["PORT"] = strconv.Itoa(c.Port)
+		env["PORT"] = config.EnvLiteral(strconv.Itoa(c.Port))
 	}
 	// The client floor, delivered at RUNTIME rather than compiled in.
 	//
@@ -613,7 +613,7 @@ func containerBody(c *config.Config, pad string) string {
 	// Omitted at the default, because a floor every real version
 	// clears is a line in the manifest that says nothing.
 	if c.MinVersion != "" && c.MinVersion != config.DefaultMinVersion {
-		env["MIN_VERSION"] = c.MinVersion
+		env["MIN_VERSION"] = config.EnvLiteral(c.MinVersion)
 	}
 	for k, v := range c.Env {
 		env[k] = v
@@ -636,7 +636,16 @@ func containerBody(c *config.Config, pad string) string {
 		b.WriteString(pad + "env:\n")
 	}
 	for _, k := range keys {
-		fmt.Fprintf(&b, "%s  - name: %s\n%s    value: %q\n", pad, k, pad, env[k])
+		fmt.Fprintf(&b, "%s  - name: %s\n", pad, k)
+		// A reference renders as valueFrom rather than value. The
+		// shape is Kubernetes' own, so a reader who knows the API
+		// already knows what it does.
+		if ref := env[k].Secret; ref != nil {
+			fmt.Fprintf(&b, "%s    valueFrom:\n%s      secretKeyRef:\n%s        name: %s\n%s        key: %s\n",
+				pad, pad, pad, ref.Name, pad, ref.Key)
+			continue
+		}
+		fmt.Fprintf(&b, "%s    value: %q\n", pad, env[k].Literal)
 	}
 	if c.Secrets != nil {
 		fmt.Fprintf(&b, "%senvFrom:\n%s  - secretRef:\n%s      name: %s\n",
@@ -1081,7 +1090,7 @@ func AppEntry(c *config.Config, src Source) (string, error) {
 	return string(b) + "\n", nil
 }
 
-func sortedKeys(m map[string]string) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)

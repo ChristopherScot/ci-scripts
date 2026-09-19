@@ -81,8 +81,29 @@ const Schema = `{
     },
     "env": {
       "type": "object",
-      "additionalProperties": { "type": "string" },
-      "description": "Plain environment variables. Secrets belong under 'secrets'."
+      "description": "Environment variables. A literal value, or a reference to a key in a Kubernetes Secret another tool created - an operator-minted database credential, say. Secrets kept in Vault belong under 'secrets' instead. Bulk injection of a whole secret is deliberately not offered: it would deliver the operator's key names rather than the ones this service reads, and this tool could not know what they are.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["secretKeyRef"],
+            "additionalProperties": false,
+            "properties": {
+              "secretKeyRef": {
+                "type": "object",
+                "required": ["name", "key"],
+                "additionalProperties": false,
+                "description": "One key in one Kubernetes Secret, the same shape as the Kubernetes field of this name.",
+                "properties": {
+                  "name": { "type": "string", "description": "The Secret's name, in this namespace." },
+                  "key": { "type": "string", "description": "Which key of it to read. CNPG writes a connection string under 'uri'." }
+                }
+              }
+            }
+          }
+        ]
+      }
     },
     "minVersion": {
       "type": "string",

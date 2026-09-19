@@ -11,7 +11,7 @@ import (
 // env vars the config never declared, and the pod crashlooped on startup.
 func TestEnvDriftIsBlocking(t *testing.T) {
 	c := &config.Config{Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
-		Env: map[string]string{"KEEP": "1"}}
+		Env: map[string]config.EnvValue{"KEEP": config.EnvLiteral("1")}}
 	if err := c.Complete(); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestEnvDriftIgnoresSecretKeys(t *testing.T) {
 	c := &config.Config{
 		Name: "svc", Team: "t", Runtime: "go-service", Port: 3000,
 		Image:   config.Image{Repository: "ghcr.io/o/svc"},
-		Env:     map[string]string{"API_URL": "http://x"},
+		Env:     map[string]config.EnvValue{"API_URL": config.EnvLiteral("http://x")},
 		Secrets: &config.Secrets{VaultPath: "svc", Keys: config.EnvKeys("API_KEY")},
 	}
 	_ = c.Complete()

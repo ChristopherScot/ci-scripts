@@ -63,13 +63,13 @@ type Config struct {
 	Namespace string `yaml:"namespace,omitempty"`
 	Replicas  int    `yaml:"replicas,omitempty"`
 
-	Image     Image             `yaml:"image,omitempty"`
-	Port      int               `yaml:"port,omitempty"`
-	Env       map[string]string `yaml:"env,omitempty"`
-	Secrets   *Secrets          `yaml:"secrets,omitempty"`
-	Ingress   *Ingress          `yaml:"ingress,omitempty"`
-	Probes    *Probes           `yaml:"probes,omitempty"`
-	Resources *Resources        `yaml:"resources,omitempty"`
+	Image     Image               `yaml:"image,omitempty"`
+	Port      int                 `yaml:"port,omitempty"`
+	Env       map[string]EnvValue `yaml:"env,omitempty"`
+	Secrets   *Secrets            `yaml:"secrets,omitempty"`
+	Ingress   *Ingress            `yaml:"ingress,omitempty"`
+	Probes    *Probes             `yaml:"probes,omitempty"`
+	Resources *Resources          `yaml:"resources,omitempty"`
 
 	// Hardened applies a non-root, read-only-rootfs securityContext.
 	//
@@ -306,6 +306,81 @@ func (k *SecretKey) UnmarshalYAML(value *yaml.Node) error {
 		}
 	}
 	return nil
+}
+
+// EnvValue is one environment variable's value: a literal, or a
+// reference to a key in a Kubernetes Secret this tool did not create.
+//
+// The reference form exists for credentials an OPERATOR mints. CNPG
+// writes a `pokedex-db-app` secret holding a connection string under
+// `uri`; cert-manager and Crossplane do the same with their own key
+// names. Those are not in Vault and should not be copied there - the
+// operator rotates them, and a copy would go stale.
+//
+// It is deliberately NOT a general passthrough of Kubernetes'
+// EnvVarSource. secretKeyRef is what is needed; configMapKeyRef and
+// fieldRef can be added when something needs them. A narrow schema can
+// be validated and completed in an editor, and can be widened later
+// without breaking anyone - a passthrough can never be narrowed.
+//
+// Bulk injection via `envFrom` is also deliberately absent. It would
+// name a secret whose key set this tool cannot know, which defeats
+// checkEnvDrift, and it delivers the operator's key names rather than
+// the ones the service reads: CNPG's `uri` would arrive as $uri, so
+// the decision "this service's URL comes from that key" would end up
+// split between config.yaml and the service's own source.
+type EnvValue struct {
+	// Literal is the value when it is written inline.
+	Literal string
+	// Secret is set instead when the value comes from a Secret.
+	Secret *SecretKeyRef
+}
+
+// SecretKeyRef addresses one key in one Kubernetes Secret, mirroring
+// the field of the same name in the Kubernetes API.
+type SecretKeyRef struct {
+	Name string `yaml:"name"`
+	Key  string `yaml:"key"`
+}
+
+// EnvLiteral builds a literal value, for a Config assembled in Go code
+// rather than decoded from YAML.
+func EnvLiteral(v string) EnvValue { return EnvValue{Literal: v} }
+
+// UnmarshalYAML accepts a bare scalar or a secretKeyRef mapping.
+//
+// The same shape SecretKey and IngressHost use: the common case stays
+// what it always was, and the mapping form covers the case the scalar
+// cannot express. An existing `env: {LOG_LEVEL: info}` decodes exactly
+// as before.
+func (v *EnvValue) UnmarshalYAML(value *yaml.Node) error {
+	var lit string
+	if err := value.Decode(&lit); err == nil {
+		v.Literal = lit
+		return nil
+	}
+
+	var m struct {
+		SecretKeyRef *SecretKeyRef `yaml:"secretKeyRef"`
+	}
+	if err := value.Decode(&m); err != nil || m.SecretKeyRef == nil {
+		return fmt.Errorf("an env value must be a literal or `{secretKeyRef: {name: <secret>, key: <key>}}`")
+	}
+	if m.SecretKeyRef.Name == "" || m.SecretKeyRef.Key == "" {
+		return fmt.Errorf("secretKeyRef needs both name and key")
+	}
+	v.Secret = m.SecretKeyRef
+	return nil
+}
+
+// MarshalYAML writes back the form it came from, which is derivable
+// from the value rather than remembered: a literal is a scalar, a
+// reference is a mapping.
+func (v EnvValue) MarshalYAML() (any, error) {
+	if v.Secret != nil {
+		return map[string]any{"secretKeyRef": v.Secret}, nil
+	}
+	return v.Literal, nil
 }
 
 // IngressHost is one hostname this service answers on.

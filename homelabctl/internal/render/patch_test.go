@@ -144,7 +144,7 @@ func TestPatchedOutputKeepsTrailingNewline(t *testing.T) {
 // generated value winning.
 func TestExplicitPortEnvIsNotDuplicated(t *testing.T) {
 	c := base()
-	c.Env = map[string]string{"PORT": "3000"}
+	c.Env = map[string]config.EnvValue{"PORT": config.EnvLiteral("3000")}
 	body := findOutput(t, mustConfig(t, c), "deployment.yaml")
 	if n := strings.Count(body, "- name: PORT"); n != 1 {
 		t.Errorf("PORT emitted %d times, want 1:\n%s", n, body)
@@ -155,7 +155,7 @@ func TestExplicitPortEnvIsNotDuplicated(t *testing.T) {
 // silently discarded.
 func TestExplicitEnvOverridesGeneratedDefault(t *testing.T) {
 	c := base()
-	c.Env = map[string]string{"PORT": "9999"}
+	c.Env = map[string]config.EnvValue{"PORT": config.EnvLiteral("9999")}
 	body := findOutput(t, mustConfig(t, c), "deployment.yaml")
 	if !strings.Contains(body, `value: "9999"`) {
 		t.Errorf("explicit PORT was discarded:\n%s", body)

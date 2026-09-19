@@ -20,7 +20,7 @@ func TestConfigYAMLRoundTrips(t *testing.T) {
 	c.Port = 8080
 	c.Replicas = 3
 	c.Image = config.Image{Repository: "ghcr.io/o/svc"}
-	c.Env = map[string]string{"LOG_LEVEL": "debug"}
+	c.Env = map[string]config.EnvValue{"LOG_LEVEL": config.EnvLiteral("debug")}
 	c.Secrets = &config.Secrets{VaultPath: "svc", Keys: []config.SecretKey{{Env: "TOKEN", Property: "api-key"}}}
 	c.Ingress = &config.Ingress{Hosts: config.IngressHosts("svc.example.com", "svc.lab"), Authelia: true}
 	c.Probes = &config.Probes{Path: "/health"}

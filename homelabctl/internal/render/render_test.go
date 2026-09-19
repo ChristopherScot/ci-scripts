@@ -1197,7 +1197,7 @@ func TestCronJobKeepsItsOwnEnvVars(t *testing.T) {
 	c.Kind = config.KindCronJob
 	c.Schedule = "*/5 * * * *"
 	c.Port = 0
-	c.Env = map[string]string{"LOG_LEVEL": "debug"}
+	c.Env = map[string]config.EnvValue{"LOG_LEVEL": config.EnvLiteral("debug")}
 
 	var body string
 	for _, o := range mustAll(t, mustConfig(t, c)) {
