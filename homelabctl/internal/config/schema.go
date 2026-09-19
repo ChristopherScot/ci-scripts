@@ -94,7 +94,7 @@ const Schema = `{
         "keys": {
           "type": "array",
           "minItems": 1,
-          "description": "Environment variables to inject. NAME reads the property 'name'; a NAME: prop mapping reads 'prop', for a Vault path whose property is not named after the variable.",
+          "description": "Environment variables to inject. NAME reads the property 'name'; NAME: prop reads 'prop' under this service's vaultPath; NAME: other/path/prop reads from another path, for a credential that belongs to something else and is reused rather than reissued.",
           "items": {
             "oneOf": [
               { "type": "string" },

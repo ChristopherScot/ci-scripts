@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // mustAll renders and fails the test on error, so cases that are not
@@ -349,6 +350,41 @@ func TestVaultPathReachesRemoteRefVerbatim(t *testing.T) {
 	}
 	if !strings.Contains(body, "key: team/svc/config") {
 		t.Errorf("vaultPath was not passed through as remoteRef.key:\n%s", body)
+	}
+}
+
+// A key naming its own path reaches remoteRef.key as that path, while
+// the rest of the keys keep the service's. One ExternalSecret, one
+// Secret, one Vault role - only the key differs per entry.
+func TestAKeyCanReadFromAnotherVaultPath(t *testing.T) {
+	c := base()
+	c.Secrets = &config.Secrets{
+		VaultPath: "cert-manager/route53",
+		Keys: []config.SecretKey{
+			{Env: "AWS_ACCESS_KEY_ID", Property: "access_key_id"},
+			{Env: "NTFY_TOKEN", Property: "grafana_token", Path: "ntfy/config"},
+		},
+	}
+
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if strings.HasSuffix(o.Path, "externalsecret.yaml") {
+			body = o.Body
+		}
+	}
+	if body == "" {
+		t.Fatal("no externalsecret rendered")
+	}
+	for _, want := range []string{
+		"remoteRef: { key: cert-manager/route53, property: access_key_id }",
+		"remoteRef: { key: ntfy/config, property: grafana_token }",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q:\n%s", want, body)
+		}
+	}
+	if n := strings.Count(body, "kind: ExternalSecret"); n != 1 {
+		t.Errorf("rendered %d ExternalSecrets, want 1", n)
 	}
 }
 
@@ -1020,5 +1056,156 @@ func TestEachIngressGetsItsOwnTLSSecret(t *testing.T) {
 	}
 	if len(seen) != 2 {
 		t.Errorf("expected two TLS secrets, got %d: %v", len(seen), seen)
+	}
+}
+
+// Scrape annotations have to land on the POD template's metadata, where
+// Alloy looks for them - not merely somewhere in the file.
+//
+// This is a structural assertion rather than a string match on purpose.
+// The CronJob rendered its annotations at an indent that made them a
+// sibling of `metadata:` instead of a child, so the block was present in
+// the YAML, the manifest applied cleanly, and Kubernetes dropped the
+// annotations as an unknown field on PodSpec. Every cronjob with
+// metrics: true was invisible to Alloy, and nothing said so. A
+// substring check for "k8s.grafana.com/scrape" passes on the broken
+// output.
+func TestScrapeAnnotationsLandOnThePodTemplate(t *testing.T) {
+	for _, tc := range []struct {
+		kind string
+		file string
+	}{
+		{config.KindService, "deployment.yaml"},
+		{config.KindCronJob, "cronjob.yaml"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			c := base()
+			c.Kind = tc.kind
+			c.Metrics = true
+			c.Port = 3000
+			if tc.kind == config.KindCronJob {
+				c.Schedule = "*/5 * * * *"
+			}
+
+			var body string
+			for _, o := range mustAll(t, mustConfig(t, c)) {
+				if o.Path == tc.file {
+					body = o.Body
+				}
+			}
+			if body == "" {
+				t.Fatalf("no %s rendered", tc.file)
+			}
+
+			var doc map[string]any
+			if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+				t.Fatalf("parsing %s: %v", tc.file, err)
+			}
+			tmpl := podTemplate(t, doc, tc.kind)
+			meta, _ := tmpl["metadata"].(map[string]any)
+			ann, _ := meta["annotations"].(map[string]any)
+			if got := ann["k8s.grafana.com/scrape"]; got != "true" {
+				t.Errorf("pod template metadata.annotations = %v, want the scrape annotations\n%s", ann, body)
+			}
+			if got := ann["k8s.grafana.com/metrics.portNumber"]; got != "3000" {
+				t.Errorf("metrics.portNumber = %v, want \"3000\"", got)
+			}
+		})
+	}
+}
+
+// podTemplate digs out spec.template (Deployment) or
+// spec.jobTemplate.spec.template (CronJob).
+func podTemplate(t *testing.T, doc map[string]any, kind string) map[string]any {
+	t.Helper()
+	spec, _ := doc["spec"].(map[string]any)
+	if kind == config.KindCronJob {
+		jt, _ := spec["jobTemplate"].(map[string]any)
+		spec, _ = jt["spec"].(map[string]any)
+	}
+	tmpl, ok := spec["template"].(map[string]any)
+	if !ok {
+		t.Fatalf("no pod template in %v", doc)
+	}
+	return tmpl
+}
+
+// Pod labels have to be on the pod, not only on the workload. Loki and
+// the Grafana dashboards select on app and team, and a CronJob's pods
+// carried neither - so a cronjob's logs were unqueryable by the labels
+// every other workload here is found with.
+func TestCronJobPodsCarryAppAndTeamLabels(t *testing.T) {
+	c := base()
+	c.Kind = config.KindCronJob
+	c.Schedule = "*/5 * * * *"
+
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if o.Path == "cronjob.yaml" {
+			body = o.Body
+		}
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("parsing cronjob.yaml: %v", err)
+	}
+	meta, _ := podTemplate(t, doc, config.KindCronJob)["metadata"].(map[string]any)
+	labels, _ := meta["labels"].(map[string]any)
+	if labels["app"] != c.Name || labels["team"] != c.Team {
+		t.Errorf("pod labels = %v, want app=%s team=%s\n%s", labels, c.Name, c.Team, body)
+	}
+}
+
+// A port is a thing a server listens on. A cronjob has none, and
+// PORT="0" is not a default - it is a wrong value dressed as one.
+func TestCronJobGetsNoPortEnvVar(t *testing.T) {
+	c := base()
+	c.Kind = config.KindCronJob
+	c.Schedule = "*/5 * * * *"
+	c.Port = 0
+
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if o.Path == "cronjob.yaml" {
+			body = o.Body
+		}
+	}
+	if strings.Contains(body, "PORT") {
+		t.Errorf("a cronjob was given a PORT:\n%s", body)
+	}
+
+	// And `env:` with nothing under it parses as null rather than as an
+	// empty list - a key that says nothing.
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("parsing cronjob.yaml: %v", err)
+	}
+	spec, _ := podTemplate(t, doc, config.KindCronJob)["spec"].(map[string]any)
+	containers, _ := spec["containers"].([]any)
+	if len(containers) == 0 {
+		t.Fatal("no containers")
+	}
+	ctr, _ := containers[0].(map[string]any)
+	if v, present := ctr["env"]; present && v == nil {
+		t.Error("env: is present but null; omit the key when there is nothing in it")
+	}
+}
+
+// A cronjob that does declare env vars still gets them.
+func TestCronJobKeepsItsOwnEnvVars(t *testing.T) {
+	c := base()
+	c.Kind = config.KindCronJob
+	c.Schedule = "*/5 * * * *"
+	c.Port = 0
+	c.Env = map[string]string{"LOG_LEVEL": "debug"}
+
+	var body string
+	for _, o := range mustAll(t, mustConfig(t, c)) {
+		if o.Path == "cronjob.yaml" {
+			body = o.Body
+		}
+	}
+	if !strings.Contains(body, "name: LOG_LEVEL") {
+		t.Errorf("a cronjob lost its env vars:\n%s", body)
 	}
 }

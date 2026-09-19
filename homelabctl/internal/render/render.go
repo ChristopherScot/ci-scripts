@@ -585,23 +585,38 @@ func metricsAnnotations(c *config.Config) string {
 // report. pad is the indent the caller nests it at.
 func containerBody(c *config.Config, pad string) string {
 	var b strings.Builder
-	b.WriteString(pad + "env:\n")
 	// PORT is a default, not an addition. Emitting it unconditionally and
 	// then ranging over Env would write the key TWICE for a config that
 	// sets it explicitly; Kubernetes accepts that and silently keeps the
 	// last one, so the duplicate is invisible until the wrong value wins.
-	env := map[string]string{"PORT": strconv.Itoa(c.Port)}
+	//
+	// A cronjob has no port, and PORT="0" is not a default - it is a
+	// wrong value dressed as one. A job that reads it to decide where to
+	// listen would bind a random port; one that ignores it is merely
+	// carrying a lie. Either way there is nothing to serve.
+	env := map[string]string{}
+	if c.Port != 0 {
+		env["PORT"] = strconv.Itoa(c.Port)
+	}
 	for k, v := range c.Env {
 		env[k] = v
 	}
 	// PORT leads, then the rest sorted. Sorting it in with the others
 	// would reorder every already-rendered manifest, so the first diff
 	// after this change would be churn in every service at once.
-	keys := []string{"PORT"}
+	var keys []string
+	if _, ok := env["PORT"]; ok {
+		keys = append(keys, "PORT")
+	}
 	for _, k := range sortedKeys(env) {
 		if k != "PORT" {
 			keys = append(keys, k)
 		}
+	}
+	// `env:` with nothing under it parses as null, not as an empty list.
+	// Kubernetes accepts it, but it is a key that says nothing.
+	if len(keys) > 0 {
+		b.WriteString(pad + "env:\n")
 	}
 	for _, k := range keys {
 		fmt.Fprintf(&b, "%s  - name: %s\n%s    value: %q\n", pad, k, pad, env[k])
@@ -666,7 +681,10 @@ spec:
       backoffLimit: 2
       template:
         metadata:
-%s        spec:
+%s          labels:
+            app: %s
+            team: %s
+        spec:
           restartPolicy: Never
           securityContext:
             seccompProfile:
@@ -675,7 +693,14 @@ spec:
             - name: %s
               image: %s
 `, c.Name, c.Namespace, c.Name, c.Team, c.Schedule, tz,
-		indentBlock(metricsAnnotations(c), "  "), indentBlock(serviceAccountName(c), "    "),
+		// Four spaces, not two: metricsAnnotations is written for the
+		// Deployment, whose pod template sits two levels shallower. At
+		// two, the annotations became a SIBLING of metadata rather than
+		// a child - present in the file, accepted by the API server,
+		// and silently discarded as an unknown field on PodSpec. Every
+		// cronjob with metrics: true was invisible to Alloy.
+		indentBlock(metricsAnnotations(c), "    "), c.Name, c.Team,
+		indentBlock(serviceAccountName(c), "    "),
 		c.Name, imageRef)
 
 	b.WriteString(containerBody(c, "              "))
@@ -785,7 +810,7 @@ spec:
 `, sa, c.Namespace, store, c.Namespace, c.VaultRoleName(), sa, secret, c.Namespace, store, secret)
 	for _, k := range c.Secrets.Keys {
 		fmt.Fprintf(&b, "    - secretKey: %s\n      remoteRef: { key: %s, property: %s }\n",
-			k.Env, c.Secrets.VaultPath, k.Property)
+			k.Env, k.PathUnder(c.Secrets.VaultPath), k.Property)
 	}
 	return strings.ReplaceAll(b.String(), "ESO_API_VERSION", ESOAPIVersion)
 }

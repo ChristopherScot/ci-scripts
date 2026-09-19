@@ -1,4 +1,6 @@
-v1.16.1
+v1.17.0
+
+v1.17.0 cronjob pods were missing their labels and dropping their scrape annotations
 
 v1.16.1 each Ingress gets its own TLS secret
 

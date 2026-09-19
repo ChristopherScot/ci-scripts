@@ -47,19 +47,14 @@ func vaultCmd() *cobra.Command {
 	return cmd
 }
 
-// vaultPolicy grants read on this service's own kv path and nothing else,
-// matching the convention in bootstrap/vault-policies.sh: compromising one
-// pod must not expose another app's secrets.
+// vaultPolicy grants read on the paths this service's keys actually name
+// and nothing else, matching the convention in
+// bootstrap/vault-policies.sh: compromising one pod must not expose
+// another app's secrets.
 func vaultPolicy(c *config.Config) string {
-	// Grant the declared path and everything under it - not an ancestor.
-	//
-	// Truncating to the first segment would mean `vaultPath:
-	// shared/myapp/config` grants read on kv/data/shared/*, i.e. every
-	// service filed under that prefix. The isolation that matters is
-	// between services, so the grant must never be broader than what the
-	// service declared.
-	base := strings.Trim(c.Secrets.VaultPath, "/")
-	return fmt.Sprintf(`path "kv/data/%s" {
+	var b strings.Builder
+	for _, base := range vaultPolicyPaths(c) {
+		fmt.Fprintf(&b, `path "kv/data/%s" {
   capabilities = ["read"]
 }
 path "kv/data/%s/*" {
@@ -72,6 +67,40 @@ path "kv/metadata/%s/*" {
   capabilities = ["read", "list"]
 }
 `, base, base, base, base)
+	}
+	return b.String()
+}
+
+// vaultPolicyPaths lists every kv path this service reads: its own
+// vaultPath, plus any a key names explicitly.
+//
+// The per-key paths have to be here. A key reading `ntfy/config` renders
+// an ExternalSecret asking Vault for it, and a policy covering only
+// vaultPath means Vault refuses - the manifests apply cleanly, ESO never
+// syncs, and the pod starts without the variable. That is the failure
+// mode the whole secrets block exists to make impossible, so the policy
+// is derived from the same keys the ExternalSecret is.
+//
+// Each path is granted exactly as declared, never an ancestor:
+// truncating `shared/myapp/config` to its first segment would grant read
+// on every service filed under `shared/`.
+func vaultPolicyPaths(c *config.Config) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		p = strings.Trim(p, "/")
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	add(c.Secrets.VaultPath)
+	for _, k := range c.Secrets.Keys {
+		add(k.Path)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // serviceRole is the single definition of the role this service needs.

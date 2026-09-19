@@ -72,3 +72,70 @@ func TestRoleBindsOnlyItsOwnServiceAccount(t *testing.T) {
 		t.Error("role binds a wildcard ServiceAccount")
 	}
 }
+
+// The policy has to cover every path the keys name, not just vaultPath.
+//
+// Without this, a key reading `ntfy/config` renders an ExternalSecret
+// asking Vault for a path the role cannot read: the manifests apply
+// cleanly, ESO never syncs, and the pod starts without the variable -
+// the exact silent failure the secrets block exists to prevent.
+func TestVaultPolicyCoversEveryPathTheKeysName(t *testing.T) {
+	c := config.Defaults()
+	c.Name, c.Team, c.Runtime = "ddns", "t", "go-service"
+	c.Secrets = &config.Secrets{
+		VaultPath: "cert-manager/route53",
+		Keys: []config.SecretKey{
+			{Env: "AWS_ACCESS_KEY_ID", Property: "access_key_id"},
+			{Env: "NTFY_TOKEN", Property: "grafana_token", Path: "ntfy/config"},
+		},
+	}
+	got := vaultPolicy(&c)
+	for _, want := range []string{
+		`path "kv/data/cert-manager/route53"`,
+		`path "kv/data/ntfy/config"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("policy does not grant %s:\n%s", want, got)
+		}
+	}
+}
+
+// A path named by two keys is granted once, not twice.
+func TestVaultPolicyDoesNotRepeatAPath(t *testing.T) {
+	c := config.Defaults()
+	c.Name, c.Team, c.Runtime = "a", "t", "go-service"
+	c.Secrets = &config.Secrets{
+		VaultPath: "a/config",
+		Keys: []config.SecretKey{
+			{Env: "ONE", Property: "one", Path: "shared/config"},
+			{Env: "TWO", Property: "two", Path: "shared/config"},
+		},
+	}
+	if n := strings.Count(vaultPolicy(&c), `path "kv/data/shared/config" {`); n != 1 {
+		t.Errorf("granted kv/data/shared/config %d times, want 1", n)
+	}
+}
+
+// A service with no cross-path keys gets exactly the policy it got
+// before this feature existed.
+func TestVaultPolicyIsUnchangedWithoutCrossPathKeys(t *testing.T) {
+	c := config.Defaults()
+	c.Name, c.Team, c.Runtime = "a", "t", "go-service"
+	c.Secrets = &config.Secrets{VaultPath: "a/config", Keys: config.EnvKeys("TOK")}
+	want := `path "kv/data/a/config" {
+  capabilities = ["read"]
+}
+path "kv/data/a/config/*" {
+  capabilities = ["read"]
+}
+path "kv/metadata/a/config" {
+  capabilities = ["read", "list"]
+}
+path "kv/metadata/a/config/*" {
+  capabilities = ["read", "list"]
+}
+`
+	if got := vaultPolicy(&c); got != want {
+		t.Errorf("policy =\n%s\nwant\n%s", got, want)
+	}
+}

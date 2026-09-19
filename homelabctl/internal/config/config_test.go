@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestValidateReportsAllProblemsAtOnce(t *testing.T) {
@@ -400,5 +402,93 @@ func TestReplicasAboveOneAreValid(t *testing.T) {
 	c.Replicas = -1
 	if err := c.Complete(); err == nil {
 		t.Error("replicas: -1 was accepted")
+	}
+}
+
+// A key may read from a path other than the service's own, written as
+// `path/property`. It exists for credentials that belong to something
+// else and are reused rather than reissued - the ddns job holds
+// cert-manager's Route 53 key and ntfy's publish token.
+func TestSecretKeyCanNameAnotherVaultPath(t *testing.T) {
+	c := loadYAML(t, "name: a\nteam: t\nruntime: go-service\n"+
+		"secrets:\n  vaultPath: cert-manager/route53\n  keys:\n"+
+		"    - AWS_ACCESS_KEY_ID: access_key_id\n"+
+		"    - NTFY_TOKEN: ntfy/config/grafana_token\n")
+
+	want := []SecretKey{
+		{Env: "AWS_ACCESS_KEY_ID", Property: "access_key_id"},
+		{Env: "NTFY_TOKEN", Property: "grafana_token", Path: "ntfy/config"},
+	}
+	for i, w := range want {
+		if c.Secrets.Keys[i] != w {
+			t.Errorf("key %d = %+v, want %+v", i, c.Secrets.Keys[i], w)
+		}
+	}
+	if got := want[0].PathUnder("cert-manager/route53"); got != "cert-manager/route53" {
+		t.Errorf("PathUnder() = %q, want the service's own path", got)
+	}
+	if got := want[1].PathUnder("cert-manager/route53"); got != "ntfy/config" {
+		t.Errorf("PathUnder() = %q, want ntfy/config", got)
+	}
+}
+
+// Round-trip: a config this tool writes is one it can read. The bare
+// form survives as bare, and a cross-path key keeps its path.
+func TestSecretKeyRoundTrips(t *testing.T) {
+	for _, k := range []SecretKey{
+		{Env: "NTFY_TOKEN", Property: "ntfy_token"},
+		{Env: "SHLINK_API_KEY", Property: "api-key"},
+		{Env: "NTFY_TOKEN", Property: "grafana_token", Path: "ntfy/config"},
+		// The case that only the Path check catches: the property IS
+		// the lowercased variable, so every other rule says "write the
+		// bare form" - which would drop the path silently.
+		{Env: "NTFY_TOKEN", Property: "ntfy_token", Path: "ntfy/config"},
+	} {
+		out, err := yaml.Marshal([]SecretKey{k})
+		if err != nil {
+			t.Fatalf("marshalling %+v: %v", k, err)
+		}
+		var back []SecretKey
+		if err := yaml.Unmarshal(out, &back); err != nil {
+			t.Fatalf("re-reading %q: %v", out, err)
+		}
+		if len(back) != 1 || back[0] != k {
+			t.Errorf("round-trip of %+v via %q gave %+v", k, out, back)
+		}
+	}
+}
+
+// A per-key path lands in the same Vault policy as vaultPath, so it
+// needs the same guard - otherwise the wildcard refused on vaultPath is
+// allowed straight back in one line further down.
+func TestSecretKeyPathMustNameOneLiteralPath(t *testing.T) {
+	for _, bad := range []string{"*/x", "kv/*/x", "../other/x", "/leading/x"} {
+		c := Defaults()
+		c.Name, c.Team, c.Runtime = "mysvc", "t", "go-service"
+		c.Secrets = &Secrets{VaultPath: "mysvc/config", Keys: []SecretKey{
+			{Env: "TOK", Property: "tok", Path: strings.TrimSuffix(bad, "/x")},
+		}}
+		if err := c.Complete(); err == nil {
+			t.Errorf("a key reading from %q was accepted", bad)
+		}
+	}
+}
+
+// A reference ending in a slash names a path and no property. It renders
+// an ExternalSecret that applies cleanly and never syncs.
+func TestSecretKeyMustNameAProperty(t *testing.T) {
+	_, err := loadYAMLErr(t, "name: a\nteam: t\nruntime: go-service\n"+
+		"secrets:\n  vaultPath: p\n  keys:\n    - TOK: ntfy/config/\n")
+	if err == nil {
+		t.Fatal("a key naming no property was accepted")
+	}
+}
+
+// Two keys writing the same variable means one silently wins.
+func TestDuplicateSecretKeyEnvIsRejected(t *testing.T) {
+	_, err := loadYAMLErr(t, "name: a\nteam: t\nruntime: go-service\n"+
+		"secrets:\n  vaultPath: p\n  keys:\n    - TOK: one\n    - TOK: two\n")
+	if err == nil {
+		t.Fatal("a duplicated environment variable was accepted")
 	}
 }

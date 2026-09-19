@@ -175,7 +175,35 @@ type Secrets struct {
 // the pod starts without the variable it needs.
 type SecretKey struct {
 	Env      string // the environment variable inside the pod
-	Property string // the property under VaultPath
+	Property string // the property under Path
+
+	// Path overrides the service's vaultPath for this one key. Empty
+	// means the service's own path, which is the normal case.
+	//
+	// It exists because "one service, one Vault path" is the right
+	// default and the wrong absolute. A service that reads from several
+	// paths is usually a service that should have been two - but not
+	// when the credential belongs to something else and is being reused
+	// rather than reissued: the ddns job holds cert-manager's Route 53
+	// key because it is cert-manager's key, and ntfy's publish token
+	// because it is ntfy's. Minting second copies of both under a
+	// ddns/ path would mean two more secrets to rotate and two more
+	// places for them to drift.
+	//
+	// It stays one ExternalSecret, one Secret and one Vault role: only
+	// the remoteRef key differs per entry. The policy question - may
+	// this role read that path - is still Vault's to answer, and it
+	// answers it at sync time whether or not this field exists.
+	Path string
+}
+
+// PathUnder returns the Vault path this key reads from, given the
+// service's default.
+func (k SecretKey) PathUnder(vaultPath string) string {
+	if k.Path != "" {
+		return k.Path
+	}
+	return vaultPath
 }
 
 // MarshalYAML writes back whichever form the key came from, so a file
@@ -191,10 +219,19 @@ type SecretKey struct {
 // bare form means "property is the lowercased env var", so the rule that
 // decodes it also decides how to encode it.
 func (k SecretKey) MarshalYAML() (any, error) {
-	if k.Property == strings.ToLower(k.Env) {
+	if k.Path == "" && k.Property == strings.ToLower(k.Env) {
 		return k.Env, nil
 	}
-	return map[string]string{k.Env: k.Property}, nil
+	return map[string]string{k.Env: k.Ref()}, nil
+}
+
+// Ref is the `path/property` form a key writes back as, or just the
+// property when it reads from the service's own path.
+func (k SecretKey) Ref() string {
+	if k.Path == "" {
+		return k.Property
+	}
+	return k.Path + "/" + k.Property
 }
 
 // EnvKeys builds keys the conventional way, for a Config assembled in Go
@@ -208,6 +245,12 @@ func EnvKeys(envs ...string) []SecretKey {
 }
 
 // UnmarshalYAML accepts a bare string or a single-entry mapping.
+//
+// The mapping value is a property under the service's own vaultPath, or
+// a `some/other/path/property` reference when it carries a slash. That
+// split is unambiguous because a Vault property name cannot contain one:
+// ESO addresses properties with a JSON path, where `/` is not a valid
+// character in a bare key.
 func (k *SecretKey) UnmarshalYAML(value *yaml.Node) error {
 	var env string
 	if err := value.Decode(&env); err == nil {
@@ -218,13 +261,18 @@ func (k *SecretKey) UnmarshalYAML(value *yaml.Node) error {
 
 	var m map[string]string
 	if err := value.Decode(&m); err != nil {
-		return fmt.Errorf("a secrets key must be `NAME` or `NAME: vault-property`")
+		return fmt.Errorf("a secrets key must be `NAME`, `NAME: vault-property` or `NAME: other/path/property`")
 	}
 	if len(m) != 1 {
 		return fmt.Errorf("a secrets key mapping must have exactly one entry, got %d", len(m))
 	}
-	for env, prop := range m {
-		k.Env, k.Property = env, prop
+	for env, ref := range m {
+		k.Env = env
+		if i := strings.LastIndex(ref, "/"); i >= 0 {
+			k.Path, k.Property = ref[:i], ref[i+1:]
+		} else {
+			k.Property = ref
+		}
 	}
 	return nil
 }
@@ -691,6 +739,36 @@ func (c Config) Validate() error {
 				"policy path and the key ESO fetches, so it must name one "+
 				"literal path",
 				c.Secrets.VaultPath, bad)
+		}
+		seenEnv := map[string]bool{}
+		for i, k := range c.Secrets.Keys {
+			switch {
+			case k.Env == "":
+				add("secrets.keys[%d] has no environment variable name", i)
+			case seenEnv[k.Env]:
+				add("secrets.keys sets %s twice", k.Env)
+			}
+			seenEnv[k.Env] = true
+
+			// A reference ending in / names a path and no property, and
+			// one that is only a property name of "" came from a value
+			// like "some/path/". Both render an ExternalSecret that
+			// applies cleanly and never syncs.
+			if k.Property == "" {
+				add("secrets.keys %s names no property", k.Env)
+			}
+			// A per-key path goes into the same Vault policy as
+			// vaultPath, so it needs the same guard: without this, the
+			// wildcard refused above is allowed straight back in one
+			// line further down.
+			if k.Path != "" {
+				if bad := vaultPathProblem(k.Path); bad != "" {
+					add("secrets.keys %s reads from %q, which %s - it is used verbatim "+
+						"as both a Vault policy path and the key ESO fetches, so it "+
+						"must name one literal path",
+						k.Env, k.Path, bad)
+				}
+			}
 		}
 	}
 	if c.Ingress != nil {
