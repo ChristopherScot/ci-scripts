@@ -56,9 +56,10 @@ func runDiff(cfgPath string) error {
 		return err
 	}
 
-	// Where render writes, so the two commands cannot disagree about
-	// which directory holds this service's manifests.
-	dir := filepath.Join(filepath.Dir(cfgPath), "deploy", c.Name)
+	// Where render writes, via the same helper, so the two commands
+	// cannot disagree about which directory holds this service's
+	// manifests.
+	dir := deployDir(cfgPath, c)
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("%s does not exist; run `homelabctl render` first", dir)
 	}

@@ -103,11 +103,13 @@ func runRender(o renderOpts) error {
 	if err != nil {
 		return err
 	}
-	out := o.out
-	if out == "" {
-		out = filepath.Join(filepath.Dir(o.cfgPath), "deploy")
+	// --out overrides the BASE, not the layout: manifests still land in
+	// <out>/<name>, so a redirected render has the same shape as a
+	// normal one and diff can still read it.
+	dir := deployDir(o.cfgPath, c)
+	if o.out != "" {
+		dir = filepath.Join(o.out, c.Name)
 	}
-	dir := filepath.Join(out, c.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

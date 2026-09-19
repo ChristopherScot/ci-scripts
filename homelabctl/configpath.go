@@ -83,6 +83,30 @@ func repoRoot() string {
 	}
 }
 
+// DeployDirName is the directory a service's rendered manifests live
+// in, relative to its config.yaml.
+//
+// One constant because seven places used to spell it, and they agreed
+// only by coincidence.
+const DeployDirName = "deploy"
+
+// deployDir is where a service's rendered manifests go.
+//
+// render writes here, diff compares here, init scaffolds here, and
+// gitSource derives the repo-relative form of this same path for
+// argocd.json. Four callers that must agree about one layout decision,
+// which was encoded separately in each of them.
+//
+// The agreement was accidental: gitSource computed <git-prefix>/deploy
+// while render wrote to <config-dir>/deploy/<name>, and those coincide
+// only because the config sits at the git prefix. --out could break it
+// at any time - manifests written to one place, argocd.json telling
+// Argo to look in another. Renders fine, PR opens, Argo syncs an empty
+// path.
+func deployDir(cfgPath string, c *config.Config) string {
+	return filepath.Join(filepath.Dir(cfgPath), DeployDirName, c.Name)
+}
+
 // gitSource reports where a service's manifests live, as Argo must fetch
 // them: the repository its working tree came from, and the deploy
 // directory within it.
@@ -119,7 +143,7 @@ func gitSource(cfgPath string) render.Source {
 	}
 	return render.Source{
 		RepoURL: url,
-		Path:    path.Join(strings.TrimSpace(string(prefix)), "deploy"),
+		Path:    path.Join(strings.TrimSpace(string(prefix)), DeployDirName),
 	}
 }
 

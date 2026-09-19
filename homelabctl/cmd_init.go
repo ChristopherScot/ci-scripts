@@ -741,7 +741,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 		}
 	}
 	for _, mp := range manifestPaths {
-		scaffolding[filepath.Join("deploy", c.Name, mp)] = true
+		scaffolding[filepath.Join(DeployDirName, c.Name, mp)] = true
 	}
 	if err := checkOverwrite(o.overwrite, scaffolding); err != nil {
 		return err
@@ -836,7 +836,7 @@ func setupLocal(o initOpts, c *config.Config, r runtime.Runtime, dir string) err
 			// deploy/*.yaml into the homelab repo AS <name>/". Nested,
 			// the copy is `cp -r` and the directory already has the name
 			// the app occupies in that repo.
-			if err := put(filepath.Join("deploy", c.Name, out.Path), out.Body); err != nil {
+			if err := put(filepath.Join(DeployDirName, c.Name, out.Path), out.Body); err != nil {
 				return err
 			}
 		}

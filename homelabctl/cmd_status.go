@@ -157,7 +157,7 @@ func serviceConfigs(root string) ([]string, error) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "deploy":
+			case ".git", "node_modules", DeployDirName:
 				return fs.SkipDir
 			}
 			return nil

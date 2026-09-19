@@ -28,11 +28,26 @@ func checkCmd() *cobra.Command {
 		Short: "fail on deploy misconfigurations that are otherwise silent",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			dir := "deploy"
+			// An explicit directory wins; `check deploy` is in every
+			// generated workflow and has to keep working.
 			if len(args) > 0 {
-				dir = args[0]
+				return runCheck(args[0])
 			}
-			return runCheck(dir)
+			// Otherwise ASK where the manifests are rather than
+			// searching for them. manifestDir probes subdirectories for
+			// a kustomization.yaml and silently returns its input on
+			// three different failure paths - including "two candidates
+			// found", which is an ordinary monorepo. It exists only
+			// because check had no way to ask.
+			cfgPath, err := findConfig()
+			if err != nil {
+				return err
+			}
+			c, err := config.Load(cfgPath)
+			if err != nil {
+				return err
+			}
+			return runCheck(deployDir(cfgPath, c))
 		},
 	}
 }
@@ -211,6 +226,10 @@ func runCheck(dir string) error {
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("no %s/ directory", dir)
 	}
+	// A bare deploy/ holds one directory per service, so resolve to the
+	// one that has the manifests. Callers that already know - the bare
+	// `check`, which asks the config - pass the service directory and
+	// this is a no-op.
 	dir = manifestDir(dir)
 
 	checkESOVersion(add)

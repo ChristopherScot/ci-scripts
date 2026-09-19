@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherScot/ci-scripts/homelabctl/internal/config"
 )
 
 // A tool that operates on a repo should work anywhere inside it.
@@ -176,5 +178,53 @@ func TestRepoRootIsEmptyOutsideARepository(t *testing.T) {
 	}
 	if got := repoRoot(); got != "" {
 		t.Errorf("repoRoot outside a repository = %q, want empty", got)
+	}
+}
+
+// One layout decision, one place.
+//
+// The deploy/<name>/ layout was spelled in seven places - render, diff,
+// init (twice), gitSource, check and status - and they agreed only by
+// coincidence: gitSource computed <git-prefix>/deploy while render
+// wrote <config-dir>/deploy/<name>, which coincide only because the
+// config sits at the git prefix.
+func TestDeployDirIsOnePlace(t *testing.T) {
+	c := config.Defaults()
+	c.Name = "svc"
+
+	got := deployDir(filepath.Join("repo", "services", "svc", "config.yaml"), &c)
+	want := filepath.Join("repo", "services", "svc", DeployDirName, "svc")
+	if got != want {
+		t.Errorf("deployDir = %q, want %q", got, want)
+	}
+
+	// A single-service repo: the config is at the root.
+	got = deployDir("config.yaml", &c)
+	want = filepath.Join(DeployDirName, "svc")
+	if got != want {
+		t.Errorf("deployDir at repo root = %q, want %q", got, want)
+	}
+}
+
+// The literal must not creep back into the commands.
+//
+// Each copy is a chance for two of them to disagree about where a
+// service's manifests are, which is how `check` ended up with a 24-line
+// heuristic that SEARCHED for the directory the others constructed.
+func TestDeployLayoutIsNotRespelled(t *testing.T) {
+	for _, f := range []string{
+		"cmd_render.go", "cmd_diff.go", "cmd_init.go", "cmd_check.go", "cmd_status.go",
+	} {
+		body, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(body), "\n") {
+			code, _, _ := strings.Cut(line, "//")
+			if strings.Contains(code, `"deploy"`) {
+				t.Errorf("%s:%d spells the deploy directory again; use deployDir or DeployDirName",
+					f, i+1)
+			}
+		}
 	}
 }

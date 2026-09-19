@@ -1,4 +1,6 @@
-v1.13.0
+v1.14.0
+
+v1.14.0 one place knows where a service's manifests live
 
 v1.13.0 register is its own command; render writes files and stops
 
