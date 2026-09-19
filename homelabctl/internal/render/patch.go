@@ -62,7 +62,13 @@ func applyPatches(body string, patches map[string]string, imageRef string) (stri
 		if len(overlay.Content) == 0 {
 			continue
 		}
+		// What the container had before the patch, so a field the merge
+		// drops can be named rather than discovered in the cluster.
+		before := containerFields(root.Content[0])
 		mergeNodes(root.Content[0], overlay.Content[0])
+		if err := checkNothingLost(documentKind(&root), before, containerFields(root.Content[0])); err != nil {
+			return "", err
+		}
 
 		var b strings.Builder
 		enc := yaml.NewEncoder(&b)
@@ -83,6 +89,76 @@ func applyPatches(body string, patches map[string]string, imageRef string) (stri
 		out += "\n"
 	}
 	return out, nil
+}
+
+// containerFields is the set of keys on the first container of a pod
+// template, or nil for a document that has none.
+//
+// Only the first: patches address containers[0], because that is the
+// only one these manifests generate.
+func containerFields(doc *yaml.Node) map[string]bool {
+	// Deployment and CronJob bury the pod template at different depths.
+	for _, path := range [][]string{
+		{"spec", "template", "spec", "containers"},
+		{"spec", "jobTemplate", "spec", "template", "spec", "containers"},
+	} {
+		node := doc
+		for _, key := range path {
+			if node = mappingNode(node, key); node == nil {
+				break
+			}
+		}
+		if node == nil || node.Kind != yaml.SequenceNode || len(node.Content) == 0 {
+			continue
+		}
+		first := node.Content[0]
+		if first.Kind != yaml.MappingNode {
+			continue
+		}
+		out := map[string]bool{}
+		for i := 0; i+1 < len(first.Content); i += 2 {
+			out[first.Content[i].Value] = true
+		}
+		return out
+	}
+	return nil
+}
+
+// checkNothingLost refuses a patch that removed a field from the
+// generated container.
+//
+// A patched list REPLACES rather than merges - see mergeNodes, where
+// that is deliberate - and `containers` is a list. So a patch that
+// means "add one env var" and writes the container entry to say where
+// to add it silently deletes everything else on it: image, ports,
+// resources, probes, securityContext.
+//
+// That is not hypothetical. It happened: a patch adding DATABASE_URL
+// to pokedex stripped the image, and Argo refused every sync for 25
+// minutes with "spec.template.spec.containers[0].image: Required
+// value" - a message that names the symptom, arrives after the merge
+// request is already merged, and says nothing about the patch that
+// caused it. Failing here costs a second and names the field.
+func checkNothingLost(kind string, before, after map[string]bool) error {
+	if before == nil || after == nil {
+		return nil
+	}
+	var lost []string
+	for field := range before {
+		if !after[field] {
+			lost = append(lost, field)
+		}
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	sort.Strings(lost)
+	return fmt.Errorf(
+		"the %s patch removed %s from the container.\n"+
+			"  A patched list replaces the generated one rather than merging into it,\n"+
+			"  so a patch naming `containers` has to restate every field it wants kept.\n"+
+			"  For an environment variable, use `env:` in config.yaml instead - it merges.",
+		kind, strings.Join(lost, ", "))
 }
 
 // documentKind reads the `kind` field of a parsed document.
