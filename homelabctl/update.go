@@ -22,7 +22,17 @@ var Version = "dev"
 
 const (
 	repoOwner = "ChristopherScot"
-	repoName  = "ci-scripts"
+
+	// homelabctl moved to its own repo, and this is the last release
+	// cut from ci-scripts. Pointing `update` at the new repo is what
+	// migrates anyone still running a ci-scripts build: they update
+	// once to get this binary, and its next update installs from
+	// ChristopherScot/homelabctl.
+	//
+	// The version line had to continue rather than restart for that to
+	// work - update gates on isNewer, so a v0.0.x release over there
+	// would read as OLDER than this one and never install.
+	repoName = "homelabctl"
 
 	// A homelabctl binary is a few MB; anything near this is not our asset.
 	maxBinarySize = 100 * 1024 * 1024

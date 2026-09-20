@@ -1,5 +1,6 @@
-v1.18.3
+v1.18.4
 
+v1.18.4 final release from this repo: `update` now installs from ChristopherScot/homelabctl
 v1.18.3 env can read a key from a Secret; patches that strip a container are refused; pods restart on secret rotation
 v1.18.2 the client floor reaches node services too
 
